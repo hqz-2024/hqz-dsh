@@ -40,6 +40,7 @@ import type {
   SessionForkValue,
   SessionListRequest,
   SessionListValue,
+  SessionOwnershipReader,
   SessionOpenWorkspacePathRequest,
   SessionOpenWorkspacePathValue,
   SessionPage,
@@ -65,6 +66,8 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host Session business API and Remote namespace owner. */
     sessionController: SessionController
+    /** Optional per-account Session visibility policy (deployment-provided). */
+    readonly sessionOwnership?: SessionOwnershipReader
   }
 }
 
@@ -219,8 +222,13 @@ export class SessionController extends TypertRemoteService {
    * @returns visible Session summaries ordered by activity.
    */
   @Remote('list')
-  async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
-    return { items: await this.listState.list(signal) }
+  async list(request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
+    const items = await this.listState.list(signal)
+    const scopeUser = request.scopeUser
+    if (scopeUser === undefined) return { items }
+    const ownership = this.ctx.get('sessionOwnership')
+    if (ownership === undefined) return { items }
+    return { items: items.filter(item => ownership.isVisible(scopeUser, item.sessionId, item.cwd)) }
   }
 
   /**

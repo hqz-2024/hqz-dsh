@@ -233,6 +233,24 @@ export interface SkillListValue {
 /** Session list request. */
 export interface SessionListRequest {
   readonly cursor?: string
+  /**
+   * Deployment-scoped visibility (stamped by an authenticating gateway):
+   * when set, the response is filtered to Sessions this user may see;
+   * absent means unfiltered. The optional `sessionOwnership` Context service
+   * implements the policy; without it the field has no effect.
+   */
+  readonly scopeUser?: string
+}
+
+/** Per-account Session visibility policy provided by the deployment (optional). */
+export interface SessionOwnershipReader {
+  /**
+   * Whether `user` may see the Session identified by `sessionId`.
+   * @param user - authenticated account name stamped by the gateway.
+   * @param sessionId - Session to judge.
+   * @param cwd - Session working directory when the summary carries one.
+   */
+  isVisible(user: string, sessionId: SessionId, cwd?: string): boolean
 }
 
 /** Session list response value. */
