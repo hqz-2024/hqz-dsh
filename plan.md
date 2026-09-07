@@ -38,11 +38,14 @@
 
 ### 2.1 角色与权限模型
 
-| 角色 | 账号示例 | 预设（提示词） | 工作空间 | Skill | 权限预设 |
+| 角色 | 账号（精确区分大小写） | 预设（提示词） | 工作空间 | Skill | 权限预设 |
 |---|---|---|---|---|---|
-| `admin` 管理员 | `admin` | `admin-preset`（全量：现有 standard 或 cordis 全功能） | 全部 | 全部 | `danger-full-access` |
-| `finance-manager` 财务经理 | `mgr` | `finance-manager-preset`（财务经理提示词：审批、复核、汇总裁决等） | `finance-ws` | finance 技能集 | `workspace-write` |
-| `finance-staff` 普通财务 | `staff` | `finance-staff-preset`（普通财务提示词：制单、录入、查询、不可审批等） | `finance-ws`（与经理共用） | 同一套 finance 技能集 | `workspace-write` |
+| `admin` 管理员 | `admin` | 默认 `standard-terminal`（全量：含动态插件/终端） | 全部 | 全部 | `danger-full-access` |
+| `finance-manager` 财务经理 | `Finance-mgr` | `finance-manager`（审批、复核、汇总裁决） | `finance-ws` | finance 技能集 | `finance-confined`（workspace-write + never） |
+| `finance-staff` 普通财务 | `Finance-staff` | `finance-staff`（制单、录入、查询、不可审批） | `finance-ws`（与经理共用） | 同一套 finance 技能集 | `finance-confined` |
+| 6 个扩展部门角色 | 待建账号 | `art-design` / `business-sales` / `procurement` / `production` / `hr-management` / `rd-development` | 各自待建（`art-ws` 等，可选） | 各自 `skills/<domain>/SKILL.md` | `finance-confined`（受限，无 shell/web/subagent/workflow） |
+
+> 8 个角色预设均已落地于 `~/.dsh/.agent-presets/<id>/`（`agent.cordis.yml` + `preset.yml` + `skills/<domain>/SKILL.md`），6 个扩展预设与 finance 预设同为受限组合。预设选择 / 工作空间（可多选）现由**账号管理界面**运行时维护，写入 `~/.dsh/auth/role-map.json` 并叠加在静态 `roleMap` 之上（见附录 F）。
 
 **门禁层角色映射（P0 选型结论：dsh-remote 的固定三档角色）**：`admin → admin`；`finance-manager / finance-staff → user`（门禁层同属"工作角色"：被拒 settings.*/credentials.*/agentPreset.*/host.*，可正常会话工作）。经理与员工的**业务差异由 `roles.yaml` 映射表承载**（同 username → 不同预设），不依赖门禁角色档位。若未来需要经理/员工在门禁层也不同（如员工禁止会话导出），P1 决策点：fork dsh-remote 扩展角色联合类型（改动小，已定位 `lib/index.js` 的 role gate 与 zod 联合）。
 
@@ -81,7 +84,7 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 **结论：认证网关选 `@xgone/dsh-remote` v0.3.0（插件式、MFA、角色门、与现有单实例形态一致）；备选 `dsh-passwords`（alpha.3 兼容矩阵背书，但为独立网关进程）。P1 实测若 dsh-remote 在 0.1.2-alpha.3 上出现兼容问题，切换备选。**
 
 **Files:**
-- 审阅：`C:\Users\bestarc\Desktop\audit\dsh-remote`、`C:\Users\bestarc\Desktop\audit\dsh-passwords`（已 clone）
+- 审阅：`C:\Users\<用户名>\Desktop\audit\dsh-remote`、`C:\Users\<用户名>\Desktop\audit\dsh-passwords`（已 clone）
 
 - [ ] **Step 1（已完成）: 克隆并审阅两个候选网关**
   审计结论摘要：
@@ -122,7 +125,7 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 - [ ] **Step 1: 复制官方 standard 生成三个预设骨架**
   命令（以 finance-manager 为例）：
   ```powershell
-  Copy-Item C:\Users\bestarc\Desktop\deepseek-harness\packages\preset\agent-presets\presets\standard\agent.cordis.yml `
+  Copy-Item C:\Users\<用户名>\Desktop\deepseek-harness\packages\preset\agent-presets\presets\standard\agent.cordis.yml `
     "$env:USERPROFILE\.dsh\.agent-presets\finance-manager\agent.cordis.yml"
   ```
 - [ ] **Step 2: 写角色提示词（persona 行）**
@@ -219,7 +222,7 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 - Modify: `~/.dsh/profiles/web/cordis.patch.yml` —— 覆写 `permission` 行，预设表新增 `finance-confined`（workspace-write + never，显示名"工作区限定"）。
 - Modify: fork 测试 `test/role-gate.test.js` —— 新增 4 例（未映射账号拒绝/映射账号放行/admin 豁免/commands 拒绝），12/12 通过。
 
-**边界语义:** `workspace-write` 的写根 = 会话 cwd = `C:\Users\bestarc\Desktop\finance-ws`（+ 平台临时目录）；approval `never` 使任何 `sandbox_permissions` 升级被确定性拒绝。读取操作不受模式限制（产品默认行为），本阶段接受该残余面；如需读取级隔离需改官方 fs-sandbox。
+**边界语义:** `workspace-write` 的写根 = 会话 cwd = `C:\Users\<用户名>\Desktop\finance-ws`（+ 平台临时目录）；approval `never` 使任何 `sandbox_permissions` 升级被确定性拒绝。读取操作不受模式限制（产品默认行为），本阶段接受该残余面；如需读取级隔离需改官方 fs-sandbox。
 
 **验收（待重启）:**
 - Finance-mgr / Finance-staff 新会话与存量会话 → 运行时上下文显示 `Current DSH file policy: workspace-write`（根为 finance-ws）+ "Approval prompts are disabled"；向 finance-ws 外写文件 → 被拒且无法升级；无 shell/terminal/subagent/web 工具；`/permission`、`/export`、`/compact` 等命令被拒。
@@ -232,12 +235,12 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 **2026-09-02 事故与修复:** npm 原版 0.2.0 按 rc.6 的 `sessionProjectionCache.coldSnapshot(sessionId)` 编写；本运行时（0.1.2-alpha.3）签名是 `coldSnapshot(meta, events)`，首次启动每会话抛 `Cannot read properties of undefined (reading 'at')`，重扫后把进程带崩（exit 4294967295）。已**本地 fork** 到 `~/.dsh/plugins/dsh-usage-panel-local`：强制 `mode="scan"`（走 `sessionQuery.listSessions/readSession/readTitle`，该 API 与 rc.6 形状一致、已对照 harness 源码验证），跳过坏掉的 projection 路径；profile 依赖改为 `link:`。**第二次事故**：`link:` 依赖不会安装被链接包自己的依赖，fork 目录内必须单独 `pnpm install`（zod/react 等），否则插件加载即 `ERR_MODULE_NOT_FOUND: zod`——已补装并验证 boot 成功。
 
 **Files:**
-- 审计：`C:\Users\bestarc\Desktop\audit\dsh-usage-panel`
+- 审计：`C:\Users\<用户名>\Desktop\audit\dsh-usage-panel`
 - Create: `~/.dsh/plugins/dsh-usage-panel-local`（本地 fork，scan 模式补丁）
 - Modify: `~/.dsh/plugins/dsh-remote-local/lib/index.js`（wrapHttp 硬门：`/usage-stats` 数据通道非 admin 一律 403；设置页本身已被 NON_ADMIN_DENY 拒掉 → 双层管理员专属）
 
 - [x] **Step 1: 审代码并挂载**
-  命令：`pnpm dsh plugin --profile web remove dsh-token-ledger-pro`（exit 0）+ `pnpm dsh plugin --profile web add dsh-usage-panel`（exit 0）→ 首启崩溃后：remove npm 版 + `add C:\Users\bestarc\.dsh\plugins\dsh-usage-panel-local`（link:，exit 0，bundles 含 `dsh-usage-panel`）
+  命令：`pnpm dsh plugin --profile web remove dsh-token-ledger-pro`（exit 0）+ `pnpm dsh plugin --profile web add dsh-usage-panel`（exit 0）→ 首启崩溃后：remove npm 版 + `add C:\Users\<用户名>\.dsh\plugins\dsh-usage-panel-local`（link:，exit 0，bundles 含 `dsh-usage-panel`）
 - [ ] **Step 2: 验证（待重启）**
   admin → 设置 → Usage 页可见全站统计；Finance-mgr/Finance-staff → 设置被拒（settings.* deny）+ `/usage-stats` 直连返回 403。
 
@@ -265,7 +268,8 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 - **2026-09-02 上传/下载/拖拽复制（P8.1）**: ① fork 门禁：guest 对全部 `/dsh-ftree-*` 返回 403"需要升级权限才能使用该功能"；为每个 ftree 请求盖 `x-dsh-role` 头；upload 的 `dir` 查询参数纳入收容校验；二进制上传体验证后直通 handler（防止后续 roleGate 吞掉 body）。② ftree 宿主 fork：新增 `POST /dsh-ftree-upload?dir&name&token`（50MB 上限、非法字符/重名处理）与 `GET /dsh-ftree-download?path`（attachment 下载）；全部 pathAllowed 检查对 admin 豁免（admin 仅持 API 访问权限）。③ ftree 客户端 fork：头部"上传"按钮 + 整列拖放上传 + 文件夹行拖放（外部文件=上传，内部行=拖拽复制）、行 draggable、右键菜单与预览列头部"下载"按钮、当前路径显示；5 秒自动刷新改自有 setInterval（内核无 timer 服务）。权限矩阵：admin=全盘 API 权限（界面不提供上级目录浏览，按用户要求移除"⬆"按钮，文件树停留在工作区）、user=仅映射工作区、guest=全部拒绝并提示升级。
 - **2026-09-02 shell 依赖移除（P8.2）**: 文件树的剪切/粘贴/删除/重命名/新建全部改写为 node:fs 直接实现（renameSync/copyFileSync/cpSync/rmSync/mkdirSync/writeFileSync），不再依赖 PowerShell 的 `ctx.shell`（该运行时下 ftree 取不到此服务，操作曾统一报"需要 shell 服务"）。shell 仅在可用时作为增强：删除走系统回收站（不可用时退化为工作区内的 `.dsh-recycle` 可恢复文件夹，客户端已隐藏该目录并提示"已移入回收文件夹"）。"打开源文件夹"功能按用户要求**移除**（右键菜单项、双击打开、doOpen 均删除）。操作提示 toast 改为自有 setTimeout 自动消失（默认 2.6s；内核无 timer 服务导致提示常驻的问题一并修复）。docx 预览走 mammoth（已装），git 面板仍依赖 shell（未在本次修复范围）。
 - **2026-09-02 xlsx 页内表格 + AI 原生文档写入（P8.3）**: ① 窗格 xlsx：宿主用 SheetJS 解析（工作簿按路径缓存），read 路由返回 {sheets/rows/merges/colWidths}；新增 `POST /dsh-ftree-xlsx-save`（编辑批量回写，被改单元格保留样式，空值删除单元格）；客户端新增 Excel 风格网格（A/B/C 列头、行号、冻结表头、绿色选中框、名称框+编辑栏、Enter 下移、双击内联编辑、底部工作表标签、保存按钮、300×40 渲染上限）。docx 预览改为 Word 纸张风（灰底白页+页边距+阴影）；旧版 .doc 明确提示另存为 .docx。② AI 原生写入器：给 dsh-doc 离线 Python 运行时引导 pip 并安装 openpyxl 3.1.5 + python-docx 1.2.0；fork 新增 `python/office_worker.py`（JSON-stdio，二进制缓冲+UTF-8，规避 Windows 管道编码）；宿主注册两个模型工具 `office_xlsx_write`（create/update，保样式）与 `office_docx_write`（create/append/replace），路径经 sandboxPolicy 收容（workspace-write 会话仅限工作区，danger-full-access 放行），defineTool 经 profile 镜像解析（fail-safe）。冒烟测试：create/update/replace 三模式全通过。
-- **2026-09-03 HTTPS 反代下文件树写操作失效（P8.5）**: 用户经 `https://…:8443` 反代访问时，浏览器 POST 带 `Origin: https://…`；fork `trustProxy` 把认证请求 Origin 规范为 `https://127.0.0.1:…`，而 ftree 宿主 `GUARD_ORIGINS` 只含 `http://` 条目 → 所有写操作（复制/剪切/删除/新建/上传/保存）被 `allowRequest` 判 403；读操作是 GET、同源不带 Origin 所以正常。修复：`allowRequest` 对回环地址（127.0.0.1/localhost/::1）不区分 scheme 一律放行。
+- **2026-09-03 HTTPS 反代下文件树写操作失效（P8.5）**: 用户经 `https://…:8443` 反代访问时，浏览器 POST 带 `Origin: https://<局域网IP>:8443`；ftree 宿主 `allowRequest` 原做"Origin 精确等于白名单"匹配（白名单只有 `http://` 条目，scheme 不符）→ 所有写操作（复制/剪切/删除/新建/上传/保存）被判 403；读操作是 GET、同源不带 Origin 所以正常。修复：`allowRequest` 改为**仅按 hostname 比对**（用 `authorityHostname` 解析 Origin，放行 127.0.0.1/localhost/::1 + 启动绑定主机 + `--trusted-host` 列表，忽略 scheme/端口差异）。
+- **2026-09-03 文件树写入/上传第二、三处修复 + 文件夹上传（P8.6）**: ① 写操作曾报 `signal time out`——fork 的 `replayable` 请求包装只支持 `Symbol.asyncIterator`，`req.on('data')` 拿不到请求体；`readBody`/`readBodyBuf` 改为 `for await (const chunk of req)`。② 上传到尚不存在的子目录失败——upload handler 改 `mkdirSync(base, { recursive: true })`。③ **文件夹上传**：客户端新增"传文件夹"按钮 + 整目录拖放，走 `webkitRelativePath` / `webkitGetAsEntry` 递归读目录（`readAllEntries`/`walkDroppedEntry`/`droppedEntries`/`handleDrop`），逐文件 POST 到 `/dsh-ftree-upload`。
 
 - **2026-09-02 工作区菜单"新建文件夹"崩溃修复（P8.4）**: 该按钮由 ftree 客户端 `enhanceWorkspaceMenu()`（对话归档功能残留）注入官方工作区右键菜单——向 React 管理的菜单手工克隆插入"新建文件夹"行，点击后与 React 渲染冲突导致页面/服务崩溃。已把 `createArchiveFolderFromMenu` / `enhanceWorkspaceMenu` / `renderArchiveFolders` 三个注入函数整体置为 no-op（MutationObserver 与定时器的调用点保留，注入与 DOM 手术全部停用）；文件树自己的右键"新建文件夹"（node 实现）不受影响。
 
@@ -333,7 +337,7 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 4. **会话迁移**：工作区管理的拖拽/归档操作（insertSessionBefore / archiveSession 为官方 Remote，admin 专属）。
 5. **fork 维护**：`~/.dsh/plugins/dsh-remote-local/`（认证+角色注入+会话门禁的本地 fork），更新上游后需人工合入；测试 `node --test <dir>/test/role-gate.test.js`。
 6. **逃生**：`enabled: false` 重启即关闭门禁；删除 `$DSH_HOME/auth/store.json` 重新引导首管理员。
-7. **权限收紧（P5.1）**：所有 roleMap 映射账号的会话被服务端钉为 `finance-confined`（workspace-write + never）——写边界为账号工作区文件夹（finance-ws = `C:\Users\bestarc\Desktop\finance-ws`），禁止升级，且 finance 预设无 shell/子代理/工作流/web 工具。新账号必须先加 roleMap 才能用（未映射账号的 `session.*` 全部拒绝）。如需给某账号更多权限：改 roleMap 指向其他预设，或在 fork 的 `confinedPresets` 白名单外放行。
+7. **权限收紧（P5.1）**：所有 roleMap 映射账号的会话被服务端钉为 `finance-confined`（workspace-write + never）——写边界为账号工作区文件夹（finance-ws = `C:\Users\<用户名>\Desktop\finance-ws`），禁止升级，且 finance 预设无 shell/子代理/工作流/web 工具。新账号必须先加 roleMap 才能用（未映射账号的 `session.*` 全部拒绝）。如需给某账号更多权限：改 roleMap 指向其他预设，或在 fork 的 `confinedPresets` 白名单外放行。
 
 **C. 验收实测结果（截至 2026-09-02，最终模型）**
 
@@ -352,16 +356,86 @@ DSH 单实例（0.1.2-alpha.3，127.0.0.1:3080）
 | UI 角色化隐藏 | ✅ 预设选择/添加工作区/选择工作区组件隐藏；侧栏工作区树按 /auth/me.workspaces 隐藏非映射工作区（fork 客户端） |
 | P6 Token 统计 | ⏳ dsh-usage-panel 已本地 fork 修复（scan 模式）+ `/usage-stats` 硬门（非 admin 403），待重启验证 |
 | P8 办公文档 | ⏳ 已安装 dsh-doc（AI 解析+OCR）+ folder-tree-sh（页内窗格，非 admin 限定 finance-ws），待重启验证 |
+| 账号管理界面（2026-09-03） | ⏳ 账号卡片可编辑 + 工作区多选下拉 + 预设选择，写入 auth/role-map.json，待重启验证 |
+| 隐藏工作区/会话（2026-09-03） | ⏳ admin 专属"隐藏/取消隐藏"，hidden-items.json + /auth/me 过滤，待重启验证 |
+| 文件树文件夹上传（2026-09-03） | ⏳ "传文件夹"按钮 + 目录拖放，配合 Origin/for-await/mkdir 三处修复，待重启验证 |
+| usage-panel 卡死修复（2026-09-03） | ⏳ scanFallback 改原始 sessionPersistence 读取（node --check 通过），待重启验证 |
+| 6 个扩展角色预设（2026-09-03） | ⏳ 8 个角色预设全部落地，待重启验证 |
+| MIGRATION.md（2026-09-03） | ✅ 已创建整部署迁移指南 |
 | P7 端到端 | ✅ 多轮实测覆盖三账号关键路径 |
 
 **C2. 实施修正记录（关键决策变更）**
 
 1. **工作空间强锁已移除**：最终模型是**纯账号归属**（create/使用即认领，列表按归属过滤），不再拒绝跨工作空间对话——工作空间仅作为新会话的默认落点。
-2. **可见性过滤实现层**：放弃网关响应改写（传输层拒绝），改为官方 `session.list` 的 `scopeUser` + `sessionOwnership` 服务（见 Agent Note [2026-09-02-session-visibility-scope](C:\Users\bestarc\Desktop\deepseek-harness\.agents\notes\implemented\feature\2026-09-02-session-visibility-scope.md)）。
+2. **可见性过滤实现层**：放弃网关响应改写（传输层拒绝），改为官方 `session.list` 的 `scopeUser` + `sessionOwnership` 服务（见 Agent Note [2026-09-02-session-visibility-scope](C:\Users\<用户名>\Desktop\deepseek-harness\.agents\notes\implemented\feature\2026-09-02-session-visibility-scope.md)）。
 3. **运行方式**：官方宿主包经 tsx 源码启动（无需编译，本会话已证实）；如改用构建产物启动则需 `pnpm --filter @deepseek-ai/dsh-api-session-controller bundle`。
 4. **P5.1 权限收紧（2026-09-02）**：Finance-mgr 会话曾成功重启服务器 → 三层封堵：预设瘦身（无 shell/subagent/workflow/web 工具）、会话级钉住（`workspace-write` + approval `never`，写根 = 工作区文件夹，升级被确定性拒绝）、API 面拒绝（`commands.execute` 全拒 + 未映射账号 `session.*` fail-closed）。admin 不受影响。
 5. **P8 办公文档（2026-09-02）**：无页内原生 Word/Excel 所见即所得编辑方案 → 采用 dsh-doc（AI 解析，工作区限定）+ folder-tree-sh（页内窗格）；后者白名单默认含全部工作区，fork 对非 admin 增加 per-user 收容门禁（仅 finance-ws）。
 6. **usage-panel 首启崩溃（2026-09-02）**：npm 原版按 rc.6 的 `coldSnapshot(sessionId)` 编写，0.1.2 改为 `coldSnapshot(meta, events)` → 全会话抛 `undefined.at` 并把进程带崩。教训：社区插件装完必须在重启后立刻验证，审计 README 不能替代运行时验证。已本地 fork 强制 scan 模式（sessionQuery API 两版本形状一致）。
+7. **账号管理界面（2026-09-03）**：设置页新增账号卡片（可编辑），支持为每账号多选工作区 + 选预设；保存写入 `~/.dsh/auth/role-map.json`（`dynamicRoleMap`/`saveRoleMap`/`effectiveRoleMap`，`{ preset, workspaces[] }` 叠加在静态 roleMap 之上），删除账号即移除映射。配置项经 `/auth/config-options` 下发（工作区列表 + 预设列表）；工作区多选用自定义勾选下拉（点击展开、✓ 切换、确认收起，弃用原生 `<select multiple>`）。
+8. **隐藏工作区/会话（admin 专属，2026-09-03）**：`/auth/hide` 写入 `~/.dsh/auth/hidden-items.json`（`{workspaces[], sessions[]}`）；会话标题经 `sessionController.list({}, undefined)` + `projections.values.title` 反查（冷会话也覆盖，`listSessionSummaries`）；客户端在"…"菜单注入 隐藏/取消隐藏（admin-only，MutationObserver 挂到 `[role="menu"]`，toast 反馈）；非 admin 侧栏工作区树按 `/auth/me.hiddenWorkspaceTitles` 过滤。
+9. **usage-panel 统计卡死（2026-09-03）**：`readSession()` 会 `Session.create` 重放超大会话日志（admin 22.9MB/5 文件，耗时数分钟）→ `scanFallback` 改为经 `sessionPersistence.open(header.id, "read").read(0, undefined)` 原始读取，强制 `mode="scan"`。
+10. **6 个扩展角色预设（2026-09-03）**：`art-design`/`business-sales`/`procurement`/`production`/`hr-management`/`rd-development`，各含 persona + 受限工具组合 + `skills/<domain>/SKILL.md`（design/sales/procurement/production/hr/rd）。
+11. **迁移指南（2026-09-03）**：新增 `~/.dsh/MIGRATION.md`（190 行），覆盖架构总览、数据/配置/插件/运行时迁移清单、路径假设（用户名 `<用户名>`、绝对路径已烘焙）与恢复验证。
+12. **git pull 评估（2026-09-03，未执行）**：本地 checkout 落后 origin/master 404 提交，上游已重写 `packages/api/session-controller`（破坏性，与本地 `scopeUser`/`sessionOwnership` 定制冲突）→ 评估结论：**不 pull**，核心仓库保持只读，继续在本地 fork 维护，避免破坏运行中的部署。
 
 **D. 部署状态文件**：`~/.dsh/upgrade-state.json`（接力检查点）、`~/.dsh/plugins/dsh-remote-local/run-diag.log`（注入/拒绝操作日志，非高频）。
 **E. 参考**：dsh-remote（GitHub/npm `@xgone/dsh-remote`）、官方 packages/workspace、packages/preset/agent-presets、persona 配置（`packages/preset/persona/src/index.ts`）。
+
+---
+
+**F. 全量改动记录（CHANGELOG，截至 2026-09-03）**
+
+> 本部署全部定制集中在本地 fork 与 `~/.dsh/` 数据目录，**核心 checkout（`C:\Users\<用户名>\Desktop\deepseek-harness`）保持只读**（仅 session-controller 的 `scopeUser`/`sessionOwnership` 为源码级本地修改）。git pull 已评估为冲突风险（404 提交落后 + 上游重写 session-controller），暂不执行。标记 ⏳ 的项已实施、待整进程重启后验收。
+
+### F1 认证与角色门禁（`~/.dsh/plugins/dsh-remote-local`，fork 自 `@xgone/dsh-remote`）
+- 多账号登录（scrypt + HMAC Cookie + TOTP），固定三档 admin/user/guest 方法级门禁。
+- 静态 `roleMap`（`profiles/web/cordis.patch.yml`）：`Finance-mgr → finance-manager + finance-ws`、`Finance-staff → finance-staff + finance-ws`。
+- 会话归属：`sessionOwnership` 服务 + `~/.dsh/auth/session-owners.json`（发言即认领、跨登录保留）；越权会话被拒（"session belongs to another account"）。
+- 隔离硬化：mapped 用户只能操作/认领自己映射工作区内的会话（越界 "session outside your workspace"）。
+- 动态角色映射：`~/.dsh/auth/role-map.json`（`dynamicRoleMap`/`saveRoleMap`/`effectiveRoleMap`，`{ preset, workspaces[] }` 多工作区），叠加在静态 roleMap 之上；`/auth/config-options` 下发工作区+预设列表；`/auth/accounts` upsert/remove/list 维护账号映射。
+- 隐藏：`/auth/hide` → `~/.dsh/auth/hidden-items.json`（workspaces/sessions）；`/auth/me` 返回 hiddenWorkspaceTitles / hiddenSessionTitles（含冷会话）。
+- 收容（P5.1）：`commands.execute` 全拒 + 未映射账号 `session.*` fail-closed + 会话钉住 `finance-confined`（workspace-write + never）。
+
+### F2 会话可见性（`packages/api/session-controller` 本地修改）
+- `SessionOwnershipReader.isVisible(user, sessionId, cwd)`、`SessionListRequest.scopeUser`、`list()` 按 `ownership.isVisible` 过滤。
+- 上游已重写该包（破坏性）；本改动仅在本机 tsx 源码运行，无需编译。
+
+### F3 文件树 / 办公文档（`~/.dsh/plugins/folder-tree-sh-local`，fork 自 `folder-tree-sh`）
+- `exports.inject = ["slots"]` 修复窗格不显示；分列布局重写（侧栏/文件树/对话/预览/详情）；内核无 timer → 自有 setInterval + MutationObserver 兜底。
+- 上传/下载/拖拽复制；shell 依赖移除（改 node:fs 实现剪切/粘贴/删除/重命名/新建，删除退化为 `.dsh-recycle`）；移除"打开源文件夹"；toast 自动消失。
+- xlsx 页内网格（SheetJS 解析 + 编辑回写）+ Word 纸张风 docx 预览；AI 原生写入器 `office_xlsx_write`/`office_docx_write`（openpyxl 3.1.5 + python-docx 1.2.0）。
+- 工作区菜单"新建文件夹"崩溃修复（三处注入函数置 no-op）。
+- **Origin 修复**：`allowRequest` 改仅 hostname 比对（回环 + 绑定主机 + trustedHosts，忽略 scheme/端口）。
+- **请求体修复**：`readBody`/`readBodyBuf` 改 `for await`（`replayable` 仅支持 asyncIterator）。
+- **上传修复**：`mkdirSync(base, { recursive: true })`。
+- **文件夹上传**："传文件夹"按钮 + 目录拖放（webkitRelativePath / webkitGetAsEntry 递归）。
+- 权限矩阵：admin=全量 API、user=映射工作区、guest=403"需要升级权限才能使用该功能"。
+
+### F4 使用统计（`~/.dsh/plugins/dsh-usage-panel-local`，fork 自 `dsh-usage-panel`）
+- 强制 scan 模式（避开 `coldSnapshot(meta, events)` 版本漂移）；`link:` 依赖需在 fork 内单独 `pnpm install`。
+- **卡死修复**：`scanFallback` 改经 `sessionPersistence.open(header.id, "read").read(0, undefined)` 原始读取，避免 `Session.create` 重放大日志。
+- `/usage-stats` 数据通道非 admin 一律 403（双层管理员专属）。
+
+### F5 角色预设（`~/.dsh/.agent-presets/<id>/`）
+- 财务：`finance-manager`（审批/复核）、`finance-staff`（制单/录入），共享 `skills/finance/SKILL.md`。
+- 扩展 6 个：`art-design`(design)、`business-sales`(sales)、`procurement`(procurement)、`production`(production)、`hr-management`(hr)、`rd-development`(rd)。
+- 默认：`standard-terminal`。
+- 8 个角色预设均为受限组合（persona + tool-fs/tool-fs-search/skill-filesystem/tool-skill/compaction-group/tool-ask-user/tool-todo，无 shell/web/subagent/workflow）；`rd-development` 未来可按需加 shell/web。
+
+### F6 本机桥接（`~/.dsh/plugins/dsh-local-bridge`）
+- 每用户 sidecar（出站 WebSocket 连 `/sidecar`，token 绑定账号）+ 模型工具 `local_run`（按会话归属路由）；文件往返 inputFiles/collect；附 README.md + AGENTS.md。
+
+### F7 文档与迁移
+- `~/.dsh/MIGRATION.md`：整部署迁移指南（数据/配置/插件/运行时清单 + 路径假设）。
+- `~/.dsh/README.md`：局域网部署说明（caddy 反代、启动、证书、功能清单 + CHANGELOG）。
+- `plan.md`（本文件）：实施计划 + 附录 A–F。
+
+### F8 部署与安全
+- caddy HTTPS 反代 `https://<LAN-IP>:8443 → 127.0.0.1:3080`（`tls internal` 自签）；dsh 只监听 loopback，`--trusted-host <LAN-IP>` 放行。
+- `remote.trustProxy: false`（保留原始 Host 以匹配 cookie）；`permission.finance-confined`（workspace-write + never）；local-bridge per-account tokens（私密）。
+
+### 运维要点
+- **host 改动需整进程重启**（插件 `lib/index.js`、cordis.patch.yml）；**客户端 `lib/client.js` 改动经 HMR 自动重发**，浏览器 Ctrl+F5 生效。
+- 启动命令：`pnpm dsh --profile web --trusted-host <局域网IP>`（于 checkout 根目录）。
+- 状态文件：`~/.dsh/auth/{store,session-owners,hidden-items,role-map}.json`、`~/.dsh/upgrade-state.json`、`~/.dsh/plugins/dsh-remote-local/run-diag.log`。
