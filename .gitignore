@@ -41,3 +41,8 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# ── 局域网部署运行时产物（本 fork 追加）─────────────────────────────────────
+# 工作区文件树的回收站 / seeed-cli 产物：属于用户数据与工具产物，不进仓库。
+**/.dsh-recycle/
+seeed-cli/
