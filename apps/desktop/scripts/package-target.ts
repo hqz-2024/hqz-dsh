@@ -11,6 +11,7 @@ import {
 import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { packageMacOSArtifacts, type DesktopPrepackagedArtifact } from './package-macos.ts'
 import { loadDesktopPackageEnvironment, validateDesktopPackageEnvironment } from './desktop-package-environment.mjs'
+import { resolveDesktopServerModeForBuild } from './desktop-server-mode-environment.mjs'
 import { createPackagingRun } from './packaging-run.mjs'
 import { withMacOSSigningKeychain } from './macos-signing-keychain.mjs'
 
@@ -321,7 +322,11 @@ export async function packageTarget(
     rmSync(releaseRecordPath, { force: true })
     rmSync(`${releaseRecordPath}.tmp`, { force: true })
   }
-  const buildEnv = withoutWindowsSigningEnvironment(withoutDesktopUploadCredentials(environment))
+  // Which deployment a client that was never configured connects to is a fact
+  // about where this build runs, so it is settled — and, when detected rather
+  // than configured, verified by asking the address — before any stage runs.
+  const serverMode = await resolveDesktopServerModeForBuild(environment, { log: message => { console.log(message) } })
+  const buildEnv = withoutWindowsSigningEnvironment(withoutDesktopUploadCredentials(serverMode.environment))
   const targetEnv: NodeJS.ProcessEnv = {
     ...buildEnv,
     DSH_DESKTOP_TARGET_PLATFORM: target.platform,

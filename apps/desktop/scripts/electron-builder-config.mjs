@@ -17,6 +17,7 @@ import {
 } from './windows-sign.mjs'
 import { resolveDesktopAutoUpdateConfig } from './desktop-auto-update-environment.mjs'
 import { resolveDesktopPolicyEnvironment } from './desktop-policy-environment.mjs'
+import { resolveDesktopServerModeEnvironment } from './desktop-server-mode-environment.mjs'
 import { desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { installWindowsDirectoryInstaller } from './windows-directory-installer.mjs'
 import { preserveWindowsRuntimeSignature } from './windows-runtime-signature.mjs'
@@ -42,6 +43,7 @@ export function createElectronBuilderConfig(
 ) {
   const appId = resolveDesktopAppId(env)
   const policy = resolveDesktopPolicyEnvironment(env)
+  const serverMode = resolveDesktopServerModeEnvironment(env)
   const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
   const resolvedPlatform = targetPlatform ?? hostPlatform
   const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
@@ -77,7 +79,19 @@ export function createElectronBuilderConfig(
   if (preparedRuntime !== undefined) buildPaths.dsh = preparedRuntime
   return {
     appId,
-    extraMetadata: { dshDesktopAppId: appId, ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }) },
+    // `source` stays out of the manifest: it tells the packaging log how the
+    // address was chosen, not the packaged application, which reads this object
+    // as the deployment to offer in server mode.
+    extraMetadata: {
+      dshDesktopAppId: appId,
+      ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
+      ...(serverMode === undefined ? {} : {
+        dshDesktopServerMode: {
+          origin: serverMode.origin,
+          ...(serverMode.label === undefined ? {} : { label: serverMode.label }),
+        },
+      }),
+    },
     productName: 'DeepSeek Harness',
     artifactName: 'deepseek-harness-${version}-${os}-${arch}.${ext}',
     directories: { output: unsigned ? join(buildPaths.root, 'unsigned-artifacts') : buildPaths.artifacts },
