@@ -77,7 +77,7 @@ export function createElectronBuilderConfig(
   if (preparedRuntime !== undefined) buildPaths.dsh = preparedRuntime
   return {
     appId,
-    extraMetadata: { dshDesktopAppId: appId, dshMandatoryUpdatePolicy: policy },
+    extraMetadata: { dshDesktopAppId: appId, ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }) },
     productName: 'DeepSeek Harness',
     artifactName: 'deepseek-harness-${version}-${os}-${arch}.${ext}',
     directories: { output: unsigned ? join(buildPaths.root, 'unsigned-artifacts') : buildPaths.artifacts },
