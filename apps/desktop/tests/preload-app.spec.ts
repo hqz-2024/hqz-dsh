@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
+import { installModeBanner } from '../src/preload-mode.ts'
 import { syncWindowsAppearance } from '../src/preload-windows.ts'
 import { DESKTOP_IPC, type DshDesktopProductApi } from '../src/ipc.ts'
 
@@ -10,6 +11,7 @@ vi.mock('electron', () => electron)
 vi.mock('../src/preload-platform.ts', () => ({ markDocumentPlatform: vi.fn() }))
 vi.mock('../src/preload-theme.ts', () => ({ syncNativeTheme: vi.fn() }))
 vi.mock('../src/preload-windows.ts', () => ({ syncWindowsAppearance: vi.fn() }))
+vi.mock('../src/preload-mode.ts', () => ({ installModeBanner: vi.fn() }))
 
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); vi.resetModules() })
 
@@ -25,7 +27,9 @@ it('limits product documents to update status and a native confirmation action',
   expect(api.updates).not.toHaveProperty('install')
   const listener = vi.fn()
   const dispose = api.updates.subscribe(listener)
-  const handler = electron.ipcRenderer.on.mock.calls[0]?.[1] as (event: unknown, state: unknown) => void
+  // The mode banner listens on the same channel object, so select by channel.
+  const handler = electron.ipcRenderer.on.mock.calls
+    .find(([channel]) => channel === DESKTOP_IPC.updatesPresentation)?.[1] as (event: unknown, state: unknown) => void
   handler({}, { visible: false })
   expect(listener).toHaveBeenCalledWith({ visible: false })
   dispose()
@@ -70,9 +74,20 @@ it('exposes a directory picker only to the local application document', async ()
 })
 
 it.each(['dsh-app://app/', 'dsh-app://shell/plugin-manager.html', 'https://example.com/'])(
-  'installs Windows appearance only for the application document (%s)', async (url) => {
+  'installs window chrome for every document the window can show (%s)', async (url) => {
+    // The caption belongs to the window rather than to one origin: server mode
+    // shows a document this shell did not author, and without the caption that
+    // window would lose its menus.
     vi.stubGlobal('location', new URL(url))
     await import('../src/preload-app.ts')
-    expect(syncWindowsAppearance).toHaveBeenCalledTimes(url === 'dsh-app://app/' ? 1 : 0)
+    expect(syncWindowsAppearance).toHaveBeenCalledTimes(1)
+  },
+)
+
+it.each(['dsh-app://app/', 'dsh-app://shell/plugin-manager.html', 'https://example.com/'])(
+  'installs the mode banner for every document the window can show (%s)', async (url) => {
+    vi.stubGlobal('location', new URL(url))
+    await import('../src/preload-app.ts')
+    expect(installModeBanner).toHaveBeenCalledWith(electron.ipcRenderer)
   },
 )

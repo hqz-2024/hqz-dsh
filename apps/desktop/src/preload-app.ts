@@ -2,6 +2,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { DESKTOP_IPC, SCHEME, type DshDesktopProductApi, type DesktopUpdatePresentation } from './ipc.ts'
+import { installModeBanner } from './preload-mode.ts'
 import { markDocumentPlatform } from './preload-platform.ts'
 import { syncNativeTheme } from './preload-theme.ts'
 import { syncWindowsAppearance } from './preload-windows.ts'
@@ -20,7 +21,6 @@ const product: DshDesktopProductApi = {
 }
 
 if (location.protocol === `${SCHEME}:` && location.hostname === 'app') {
-  syncWindowsAppearance()
   contextBridge.exposeInMainWorld('__DSH_DIRECTORY_PICKER__', {
     pick: () => ipcRenderer.invoke(DESKTOP_IPC.directoryPick) as Promise<string | null>,
   })
@@ -32,5 +32,12 @@ if (location.protocol === `${SCHEME}:` && location.hostname === 'app') {
 
 markDocumentPlatform()
 syncNativeTheme()
+// The Windows caption and the mode banner belong to the window rather than to
+// one origin: server mode shows the deployment's own Web UI, and without the
+// caption its title bar would lose the menus and the window would give no sign
+// of which deployment it is showing. Both stay outside the gate above, which
+// guards only the privileged bridges.
+syncWindowsAppearance()
+installModeBanner(ipcRenderer)
 // Main-process IPC also verifies the owning window and top frame.
 contextBridge.exposeInMainWorld('dshDesktop', location.protocol === `${SCHEME}:` && location.hostname === 'app' ? product : { protocolVersion: 1 })

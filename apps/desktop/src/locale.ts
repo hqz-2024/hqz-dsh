@@ -86,6 +86,20 @@ export const en = {
   mandatoryCopyFailed: 'Copy failed. Select and copy the address below manually.',
   mandatoryAddress: 'Download address',
   mandatoryNotification: 'Return to the application to confirm installation and restart.',
+  modeMenu: 'Mode',
+  modeLocal: 'Local mode',
+  modeServer: 'Server mode',
+  modeServerBanner: 'Server mode',
+  modeSwitchToLocal: 'Switch to local',
+  modeSwitchToServer: 'Switch to server',
+  modeUnavailableTitle: 'No server is configured',
+  modeUnavailableDetail: 'This build carries no deployment to connect to. Set one in the client settings file, then restart the application.',
+  serverUnreachableTitle: 'Cannot reach the server',
+  serverUnreachableDetail: 'The application could not load {origin}. Check that the deployment is running and that this computer is on the same network.',
+  serverRetry: 'Try again',
+  serverSwitchToLocal: 'Use local mode',
+  serverCertificateRefusedTitle: 'The server certificate was refused',
+  serverCertificateRefusedDetail: 'The certificate presented by {origin} is not the one this client expects. The connection was stopped.',
 } as const
 
 /** Every Desktop locale supplies the complete English key set. */
@@ -177,6 +191,20 @@ export const zh = {
   mandatoryCopyFailed: '复制失败，请手动选择下方地址复制。',
   mandatoryAddress: '下载地址',
   mandatoryNotification: '返回应用确认安装并重启。',
+  modeMenu: '模式',
+  modeLocal: '本地模式',
+  modeServer: '服务器模式',
+  modeServerBanner: '服务器模式',
+  modeSwitchToLocal: '切回本地',
+  modeSwitchToServer: '切到服务器',
+  modeUnavailableTitle: '未配置服务器',
+  modeUnavailableDetail: '这个安装包没有内置要连接的部署。请在客户端设置文件里填写服务器地址，然后重启应用。',
+  serverUnreachableTitle: '连不上服务器',
+  serverUnreachableDetail: '无法加载 {origin}。请确认部署在运行，且这台电脑与服务器在同一网络。',
+  serverRetry: '重试',
+  serverSwitchToLocal: '改用本地模式',
+  serverCertificateRefusedTitle: '服务器证书被拒绝',
+  serverCertificateRefusedDetail: '{origin} 出示的证书不是这个客户端所预期的，连接已中止。',
 } as const satisfies DesktopMessages
 
 /** Locale payload exposed to the Desktop-owned renderer. */

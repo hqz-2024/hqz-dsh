@@ -18,6 +18,12 @@ vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'tes
 
 const harness = await vi.hoisted(async () => {
   const { EventEmitter } = await import('node:events')
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  // The shell stores the selected mode and the deployment it may connect to
+  // under Electron's user-data directory; each test process gets its own.
+  const userData = mkdtempSync(join(tmpdir(), 'dsh-desktop-user-data-'))
   function deferred() {
     let resolve!: () => void
     let reject!: (error: Error) => void
@@ -69,6 +75,7 @@ const harness = await vi.hoisted(async () => {
     readonly focus = vi.fn()
     readonly restore = vi.fn()
     readonly setSize = vi.fn()
+    readonly setTitle = vi.fn()
     readonly setTitleBarOverlay = vi.fn()
     constructor(readonly options: { show: boolean; modal?: boolean }) {
       super(); if (windowFailure !== undefined) throw windowFailure; windows.push(this); if (options.modal) policyBlocked.resolve()
@@ -119,6 +126,7 @@ const harness = await vi.hoisted(async () => {
     getLocale: (): string => 'en-US',
     getVersion: () => '1.0.0',
     getAppPath: () => 'desktop-test-app',
+    getPath: () => userData,
     setAboutPanelOptions: vi.fn<(options: Electron.AboutPanelOptionsOptions) => void>(),
     requestSingleInstanceLock: () => true,
     exit: vi.fn(),
@@ -165,6 +173,9 @@ const harness = await vi.hoisted(async () => {
       windows.length = 0; hosts.length = 0; handlers.clear(); app.removeAllListeners()
       powerMonitor.removeAllListeners()
       app.isPackaged = true
+      // A mode or deployment written by one test must not decide the next one.
+      rmSync(join(userData, 'desktop-mode.json'), { force: true })
+      rmSync(join(userData, 'desktop-client.json'), { force: true })
       windowFailure = undefined
       pluginsEnabled = false
       closeWindowsOnQuit = false
@@ -511,6 +522,9 @@ describe('desktop main startup', () => {
     const window = harness.windows[0]!
     const listener = harness.ipcOn.mock.calls.find(([channel]) => channel === DESKTOP_IPC.windowsAppearance)![1]
     const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
+    // The shell sets the caption for the mode before any document reports its
+    // palette; only the application document may then replace it.
+    window.setTitleBarOverlay.mockClear()
     listener({ ...event, senderFrame: { url: 'dsh-app://app/' } }, 'zh-CN', '#ffffff', '#000000')
     expect(window.setTitleBarOverlay).not.toHaveBeenCalled()
     listener(event, 'zh-CN', 'rgb(249, 250, 251)', '#0f1115')
@@ -547,7 +561,7 @@ describe('desktop main startup', () => {
     expect(() => handler(event, 'application', NaN, 34)).toThrow('invalid popup request')
     const application = handler(event, 'application', 48, 34)
     expect(harness.menu.buildFromTemplate.mock.lastCall![0].map(item => item.label ?? item.type)).toEqual([
-      '关于 DeepSeek Harness', 'separator', '检查更新…', 'separator', '退出',
+      '关于 DeepSeek Harness', 'separator', '检查更新…', '模式', 'separator', '退出',
     ])
     expect(harness.popup.mock.lastCall![0]).toMatchObject({ window, x: 48, y: 34 })
     expect(harness.popup.mock.lastCall![0].callback).toBeTypeOf('function')
@@ -583,9 +597,16 @@ describe('desktop main startup', () => {
       ? ['Desktop test', 'fileMenu', 'editMenu', 'windowMenu']
       : ['Application', 'editMenu'])
     const application = template[0]!.submenu as MenuItemConstructorOptions[]
+    // The Mode entry sits between the update command and the quit commands: it
+    // is where both deployments this window can show are chosen.
     expect(application.map(describeItem)).toEqual(platform === 'darwin'
-      ? ['about', 'separator', en.checkUpdatesMenu, 'separator', 'hide', 'hideOthers', 'unhide', 'separator', 'quit']
-      : ['about', 'separator', en.checkUpdatesMenu, 'separator', 'quit'])
+      ? ['about', 'separator', en.checkUpdatesMenu, en.modeMenu, 'separator', 'hide', 'hideOthers', 'unhide', 'separator', 'quit']
+      : ['about', 'separator', en.checkUpdatesMenu, en.modeMenu, 'separator', 'quit'])
+    const modeMenu = application.find(item => item.label === en.modeMenu)?.submenu as MenuItemConstructorOptions[]
+    expect(modeMenu.map(item => [item.label, item.checked])).toEqual([
+      [en.modeLocal, true],
+      [en.modeServer, false],
+    ])
     expect(harness.menu.setApplicationMenu).toHaveBeenCalledOnce()
   })
 

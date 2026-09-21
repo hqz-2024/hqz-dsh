@@ -23,11 +23,22 @@ import { DesktopProjectManager } from './project-manager.ts'
 import { DesktopHostProcess, DesktopHostUncleanExitError } from './host-process.ts'
 import { installDesktopDirectoryPicker } from './directory-picker.ts'
 import { DesktopBackendController } from './backend-controller.ts'
-import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopUpdateState } from './ipc.ts'
+import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopModePresentation, type DesktopUpdateState } from './ipc.ts'
 import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-document.ts'
+import { serveShellDocument } from './shell-document.ts'
+import {
+  certificateFingerprint256,
+  decideServerCertificate,
+  isDesktopMode,
+  readDesktopMode,
+  resolveServerModeConfig,
+  serverNavigationAllowed,
+  writeDesktopMode,
+  type DesktopMode,
+} from './server-mode.ts'
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
 import { DesktopUpdateJournal } from './update-journal.ts'
 import { DesktopUpdatePreparationError } from './update-error.ts'
@@ -108,7 +119,7 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
   return port
 }
 
-function createWindow(preload: string, show = false, primary = false): BrowserWindow {
+function createWindow(preload: string, show = false, primary = false, staysInWindow: (url: string) => boolean = () => false): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -173,8 +184,15 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
   window.webContents.on('will-navigate', (event, url) => {
     const destination = new URL(url)
     const current = new URL(window.webContents.getURL())
-    if (destination.protocol !== `${SCHEME}:`
-      && !(destination.protocol === 'http:' && destination.origin === current.origin)) {
+    // A single-page application rewrites its own URL constantly, so a document
+    // stays in the window as long as it remains on the origin it is already
+    // showing. That covers both schemes the Web application is served over:
+    // `http:` for the Host the shell starts, `https:` for a deployment behind a
+    // TLS terminator. Anything else — and any navigation the server-mode policy
+    // allows — is either dropped or handed to the system browser.
+    const sameOrigin = (destination.protocol === 'http:' || destination.protocol === 'https:')
+      && destination.origin === current.origin
+    if (destination.protocol !== `${SCHEME}:` && !sameOrigin && !staysInWindow(url)) {
       event.preventDefault()
       if (['http:', 'https:'].includes(destination.protocol)) void shell.openExternal(url)
     }
@@ -190,6 +208,25 @@ async function main(): Promise<void> {
   const development = !app.isPackaged
   const activeProject = paths.profile
   const manager = new DesktopProjectManager(paths, resources)
+  // The deployment this window may show in server mode, and the mode the last
+  // run left selected. Both are resolved before the first window exists, because
+  // the document that window loads is what they decide.
+  const clientSettingsFile = join(app.getPath('userData'), 'desktop-client.json')
+  const modeFile = join(app.getPath('userData'), 'desktop-mode.json')
+  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
+  const serverConfig = resolveServerModeConfig({
+    manifestValue: 'dshDesktopServerMode' in manifest ? manifest.dshDesktopServerMode : undefined,
+    environmentValue: process.env.DSH_DESKTOP_SERVER_MODE,
+    settingsFile: clientSettingsFile,
+  })
+  let mode: DesktopMode = readDesktopMode(modeFile)
+  if (mode === 'server' && serverConfig === undefined) {
+    // A remembered server mode with nothing to connect to would show an empty
+    // window; local mode always exists, and the switch reports why.
+    console.warn('desktop server mode: no deployment is configured; starting in local mode')
+    mode = 'local'
+  }
   let quitting = false
   let startup: Promise<void> | undefined
   let workspaceRecovery: Promise<void> | undefined
@@ -223,6 +260,43 @@ async function main(): Promise<void> {
   let hostUrl: string | undefined
   let hostCookie: string | undefined
   let injections: readonly unknown[] = []
+  /** The document the window shows for the mode it is in. */
+  const modeUrl = (): string => (mode === 'server' && serverConfig !== undefined ? serverConfig.origin : applicationUrl)
+  /** What the shell tells a document about the mode its window is showing. */
+  const modePresentation = (): DesktopModePresentation => ({
+    mode,
+    text: mode === 'server' ? messages.modeServerBanner : messages.modeLocal,
+    switchText: messages.modeSwitchToLocal,
+    canSwitch: serverConfig !== undefined,
+    ...(serverConfig?.label === undefined ? {} : { label: serverConfig.label }),
+    ...(serverConfig === undefined ? {} : { origin: serverConfig.origin }),
+  })
+  const publishMode = (): void => {
+    mainWindow?.webContents.send(DESKTOP_IPC.mode, modePresentation())
+  }
+  /**
+   * Give the window the chrome its mode owns.
+   *
+   * The caption colour is pushed by the page in local mode, because the Web UI
+   * reads the active palette. Server mode shows a document this shell did not
+   * author, and that document cannot know which deployment it is being shown
+   * for, so the shell sets an unmistakable amber caption itself. The title
+   * carries the same fact into the taskbar and Alt-Tab.
+   */
+  const applyModeChrome = (): void => {
+    const window = mainWindow
+    if (window === undefined || window.isDestroyed()) return
+    window.setTitle(mode === 'server'
+      ? `DeepSeek Harness — ${messages.modeServer}${serverConfig?.label === undefined ? '' : ` · ${serverConfig.label}`}`
+      : 'DeepSeek Harness')
+    if (process.platform !== 'win32') return
+    window.setTitleBarOverlay(mode === 'server'
+      ? { color: '#f7c948', symbolColor: '#3b2600' }
+      : {
+          color: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb',
+          symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
+        })
+  }
   const assertProductSender = (event: IpcMainInvokeEvent): void => {
     assertDesktopSender(event, ['app'])
     if (mainWindow === undefined || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents
@@ -323,6 +397,11 @@ async function main(): Promise<void> {
   stopForRecovery = () => backend.close()
 
   const reconcileBackend = (): Promise<void> => {
+    // Server mode shows a deployment this shell does not run: it starts no Host
+    // and writes no profile, so no local agent owns the session. Local mode
+    // loads the packaged document first — the loading page accepts boot
+    // injections whenever they arrive — and starts the Host behind it.
+    if (mode === 'server') return navigateMain(modeUrl())
     startup ??= (async () => {
       await navigateMain(applicationUrl)
       await backend.start(async () => {
@@ -336,6 +415,43 @@ async function main(): Promise<void> {
       throw error
     }).finally(() => { startup = undefined })
     return startup
+  }
+
+  let switching = false
+  /**
+   * Show the other deployment in the same window.
+   *
+   * The window is never destroyed: replacing the document is enough, and
+   * destroying the only window would quit the application. The local Host keeps
+   * running underneath, so switching back is one page load rather than a cold
+   * start, and nothing about the profile changes either way.
+   * @param next - the mode to show.
+   */
+  const switchMode = async (next: DesktopMode): Promise<void> => {
+    if (switching || next === mode) return
+    if (next === 'server' && serverConfig === undefined) {
+      await ordinaryMessageBox({
+        type: 'info', title: messages.modeUnavailableTitle, message: messages.modeUnavailableDetail,
+      })
+      return
+    }
+    switching = true
+    try {
+      mode = next
+      const failure = writeDesktopMode(modeFile, mode)
+      if (failure !== undefined) console.error('desktop server mode: could not store the selected mode', failure)
+      // The memoised entry describes the document being replaced, so it must not
+      // survive the switch even when the next URL happens to match it.
+      navigation = undefined
+      applyModeChrome()
+      publishMode()
+      await reconcileBackend()
+      publishMode()
+    } finally { switching = false }
+  }
+  const reportServerModeLoaded = (): void => {
+    applyModeChrome()
+    publishMode()
   }
 
   const updates = new DesktopUpdateCoordinator(
@@ -397,6 +513,7 @@ async function main(): Promise<void> {
 
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url)
+    if (url.hostname === 'shell') return serveShellDocument(request)
     if (url.hostname === 'app') {
       if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.startsWith('/assets/')
         || ['/favicon.svg', '/manifest.webmanifest'].includes(url.pathname)) {
@@ -411,6 +528,34 @@ async function main(): Promise<void> {
   })
 
   installDesktopDirectoryPicker(() => mainWindow)
+
+  // Accept the certificate a configured deployment presents, and only that
+  // one: the decision is scoped to the configured origin and compares the
+  // fingerprint itself, because Electron's own error is not a trust decision.
+  app.on('certificate-error', (event, _webContents, url, _error, certificate, callback) => {
+    if (serverConfig === undefined) return
+    let fingerprint: string | undefined
+    try {
+      fingerprint = certificateFingerprint256(certificate.data ?? '')
+    } catch {
+      fingerprint = undefined
+    }
+    const decision = decideServerCertificate(serverConfig, url, fingerprint)
+    console.info(`desktop server mode: ${decision.reason}`)
+    if (!decision.accept) return
+    event.preventDefault()
+    callback(true)
+  })
+
+  // The banner's switch action arrives as a plain send from the preload, which
+  // runs on the remote document too. It carries no authority of its own, so the
+  // request is validated against the window's own top frame and nothing else.
+  ipcMain.on(DESKTOP_IPC.modeSwitch, (event, requested: unknown) => {
+    if (mainWindow === undefined || event.sender !== mainWindow.webContents
+      || event.senderFrame === null || event.senderFrame !== mainWindow.webContents.mainFrame) return
+    if (!isDesktopMode(requested)) return
+    void switchMode(requested)
+  })
 
   ipcMain.handle(DESKTOP_IPC.boot, async (event) => {
     assertDesktopSender(event, ['app'])
@@ -593,10 +738,28 @@ async function main(): Promise<void> {
   const hideCommands: MenuItemConstructorOptions[] = darwin
     ? [{ role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }]
     : []
+  const modeItems = (): MenuItemConstructorOptions[] => [
+    {
+      label: currentDesktopLocale().messages.modeLocal,
+      type: 'radio',
+      checked: mode === 'local',
+      click: () => { void switchMode('local') },
+    },
+    {
+      label: currentDesktopLocale().messages.modeServer,
+      type: 'radio',
+      checked: mode === 'server',
+      enabled: serverConfig !== undefined,
+      click: () => { void switchMode('server') },
+    },
+  ]
   const applicationItems = (): MenuItemConstructorOptions[] => [
     { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
     { type: 'separator' },
     { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
+    // Both modes are reachable from here, and the menu is rebuilt per popup, so
+    // the radio marks the mode the window is showing right now.
+    { label: currentDesktopLocale().messages.modeMenu, submenu: modeItems() },
     { type: 'separator' },
     ...hideCommands,
     { role: 'quit', ...(process.platform === 'win32' ? { label: currentDesktopLocale().messages.exitApplication } : {}) },
@@ -656,14 +819,40 @@ async function main(): Promise<void> {
   }
 
   const createMainWindow = (): BrowserWindow => {
-    const window = createWindow(appPreload, true, true)
+    const window = createWindow(appPreload, true, true, url => serverNavigationAllowed(serverConfig, url))
     mainWindow = window
     window.on('focus', automaticCheck)
     window.on('closed', () => { if (mainWindow === window) mainWindow = undefined })
+    window.webContents.on('did-finish-load', () => {
+      // The document is new after every switch and every reload, so the mode it
+      // must show is re-published rather than assumed to have survived.
+      reportServerModeLoaded()
+    })
+    window.on('page-title-updated', (event) => {
+      // In local mode the document title is the session name and belongs to the
+      // page. In server mode the title carries which deployment is on screen,
+      // and the remote page's own <title> would replace it — the taskbar and
+      // Alt-Tab are two of the few places the mode stays visible while the
+      // document covers the rest of the frame.
+      if (mode === 'server') event.preventDefault()
+    })
     window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
-      if (isMainFrame && code !== -3 && !quitting && !window.isDestroyed()) {
-        reportFatal(new Error(`Desktop page failed to load: ${url} (${String(code)}: ${description})`))
+      if (!isMainFrame || code === -3 || quitting || window.isDestroyed()) return
+      if (mode === 'server') {
+        // Native recovery exists to repair the bundled runtime. A deployment
+        // that is unreachable is not a damaged installation, so offer the two
+        // actions that can actually help instead of the plugin-repair advice.
+        void handleServerLoadFailure(url)
+        return
       }
+      reportFatal(new Error(`Desktop page failed to load: ${url} (${String(code)}: ${description})`))
+    })
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || !input.control || !input.alt) return
+      const requested: DesktopMode | undefined = input.code === 'Digit1' ? 'server' : input.code === 'Digit2' ? 'local' : undefined
+      if (requested === undefined) return
+      event.preventDefault()
+      void switchMode(requested)
     })
     window.webContents.on('preload-error', (_event, _path, error) => {
       if (!quitting && !window.isDestroyed()) reportFatal(error)
@@ -676,13 +865,33 @@ async function main(): Promise<void> {
     })
     return window
   }
+  /**
+   * Offer retry or a return to local mode after the deployment failed to load.
+   * @param url - the document that failed, quoted back to the user.
+   */
+  const handleServerLoadFailure = async (url: string): Promise<void> => {
+    const window = mainWindow
+    if (window === undefined || window.isDestroyed() || quitting) return
+    const origin = serverConfig?.origin ?? url
+    const result = await updateDialog.show(window, {
+      type: 'error',
+      title: messages.serverUnreachableTitle,
+      message: formatDesktopMessage(messages.serverUnreachableDetail, { origin }),
+      buttons: [messages.serverRetry, messages.serverSwitchToLocal],
+      cancelId: 0,
+    })
+    if (quitting) return
+    if (result.response === 1) { await switchMode('local'); return }
+    navigation = undefined
+    await navigateMain(modeUrl()).catch((error: unknown) => { console.error(error) })
+  }
   focusPrimaryWindow = () => {
     if (quitting) return
     if (isMandatory()) { mandatoryUI?.focus(); return }
     const window = mainWindow
     if (window === undefined || window.isDestroyed()) {
       try { createMainWindow() } catch (error) { reportFatal(error); return }
-      void navigateMain(applicationUrl).catch(reportFatal)
+      void navigateMain(modeUrl()).catch(reportFatal)
       return
     }
     if (window.isMinimized()) window.restore()
@@ -716,8 +925,7 @@ async function main(): Promise<void> {
   })
 
   mainWindow = createMainWindow()
-  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
-  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
+  applyModeChrome()
   const developmentPolicy = app.isPackaged ? undefined : process.env.DSH_DESKTOP_MANDATORY_UPDATE_CONFIG
   const policyInput: unknown = app.isPackaged
     ? ('dshMandatoryUpdatePolicy' in manifest ? manifest.dshMandatoryUpdatePolicy : undefined)

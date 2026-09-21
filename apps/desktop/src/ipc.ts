@@ -13,7 +13,25 @@ export const DESKTOP_IPC = {
   nativeThemeSet: 'dsh-desktop:native-theme-set',
   windowsAppearance: 'dsh-desktop:windows-appearance',
   windowsMenu: 'dsh-desktop:windows-menu',
+  mode: 'dsh-desktop:mode',
+  modeSwitch: 'dsh-desktop:mode-switch',
 } as const
+
+/** What the shell tells a document about the mode its window is showing. */
+export interface DesktopModePresentation {
+  /** The mode currently shown. */
+  readonly mode: 'local' | 'server'
+  /** Localized name of that mode. */
+  readonly text: string
+  /** Localized label of the action that leaves server mode, when one is offered. */
+  readonly switchText: string
+  /** Whether the shell will honour a switch request from this document. */
+  readonly canSwitch: boolean
+  /** Configured deployment name, when it published one. */
+  readonly label?: string
+  /** Configured deployment origin, shown as the banner's tooltip. */
+  readonly origin?: string
+}
 
 /** Desktop release update state rendered by desktop-owned UI. */
 export type DesktopUpdatePreparationFailureKind = 'stop-failed' | 'tasks-changed' | 'tasks-unavailable'
