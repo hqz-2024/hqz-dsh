@@ -75,7 +75,6 @@ const harness = await vi.hoisted(async () => {
     readonly focus = vi.fn()
     readonly restore = vi.fn()
     readonly setSize = vi.fn()
-    readonly setTitle = vi.fn()
     readonly setTitleBarOverlay = vi.fn()
     constructor(readonly options: { show: boolean; modal?: boolean }) {
       super(); if (windowFailure !== undefined) throw windowFailure; windows.push(this); if (options.modal) policyBlocked.resolve()

@@ -69,8 +69,7 @@ describe('session archive scheduling', () => {
 
   it('accepts an explicit destination override without archive.json', () => {
     writeScript()
-    expect(resolveSessionArchiveConfig({ dshHome: home, environment: { HQZ_ARCHIVE_ORIGIN: 'https://x.example:1' } })?.origin)
-      .toBeUndefined()
+    // 只认 `archive.json` 会让"用环境变量指定归档端"的机器永远不排程。
     expect(resolveSessionArchiveConfig({ dshHome: home, environment: { HQZ_ARCHIVE_ORIGIN: 'https://x.example:1' } }))
       .toBeDefined()
   })
