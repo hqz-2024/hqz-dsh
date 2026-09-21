@@ -165,6 +165,33 @@ function readJson(path: string): unknown {
 }
 
 /**
+ * Parse the environment override.
+ *
+ * The variable carries the deployment, but its name reads like a mode
+ * selector, so a bare `local` is the mistake to expect from it. That value is
+ * reported as the variable holding something other than a deployment, together
+ * with what it should hold and how local mode is reached, rather than as
+ * whatever `JSON.parse` happened to say about the first character.
+ * @param value - raw `DSH_DESKTOP_SERVER_MODE`, usually only set in development.
+ * @returns the parsed value, or undefined when unset or blank.
+ * @throws when the value is present and is not JSON.
+ */
+function parseEnvironmentValue(value: string | undefined): unknown {
+  const trimmed = value?.trim() ?? ''
+  if (trimmed === '') return undefined
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch (error) {
+    throw new Error(
+      `desktop server mode: DSH_DESKTOP_SERVER_MODE is not valid JSON (received ${JSON.stringify(trimmed)}); `
+      + 'it carries the deployment, for example {"origin":"https://deployment.example:8443"}, and an unset '
+      + 'variable starts in local mode',
+      { cause: error },
+    )
+  }
+}
+
+/**
  * Resolve the deployment the client should offer in server mode.
  *
  * Precedence is override, then the person's own file, then the packaged
@@ -183,9 +210,7 @@ export function resolveServerModeConfig(options: {
   readonly environmentValue: string | undefined
   readonly settingsFile: string
 }): ResolvedServerModeConfig | undefined {
-  const environment = options.environmentValue === undefined || options.environmentValue.trim() === ''
-    ? undefined
-    : JSON.parse(options.environmentValue) as unknown
+  const environment = parseEnvironmentValue(options.environmentValue)
   const userFile = readJson(options.settingsFile) as { server?: unknown } | undefined
   return resolveDesktopServerModeConfig(environment, 'DSH_DESKTOP_SERVER_MODE')
     ?? resolveDesktopServerModeConfig(userFile?.server, options.settingsFile)

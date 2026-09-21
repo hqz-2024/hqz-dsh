@@ -90,6 +90,17 @@ describe('server-mode configuration precedence', () => {
     })).toThrow(/must use https/u)
   })
 
+  it('names the environment variable when its value is a mode word rather than a deployment', () => {
+    // The variable's name reads like a mode selector, so `local` is the mistake
+    // to expect from it; the report has to name what it carries instead of
+    // repeating what JSON.parse said about the first character.
+    const resolve = (): unknown => resolveServerModeConfig({
+      manifestValue: undefined, environmentValue: 'local', settingsFile,
+    })
+    expect(resolve).toThrow(/DSH_DESKTOP_SERVER_MODE is not valid JSON/u)
+    expect(resolve).toThrow(/unset variable starts in local mode/u)
+  })
+
   it('prefers a usable later layer over a deployment the file does not configure', () => {
     writeFileSync(settingsFile, JSON.stringify({ somethingElse: true }))
     expect(resolveServerModeConfig({
