@@ -19,6 +19,7 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron'
 import { resolveDesktopPaths } from './paths.ts'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { DesktopProjectManager } from './project-manager.ts'
 import { DesktopHostProcess, DesktopHostUncleanExitError } from './host-process.ts'
 import { installDesktopDirectoryPicker } from './directory-picker.ts'
@@ -29,6 +30,7 @@ import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-document.ts'
 import { serveShellDocument } from './shell-document.ts'
+import { resolveSessionArchiveConfig, SessionArchive } from './session-archive.ts'
 import {
   certificateFingerprint256,
   decideServerCertificate,
@@ -204,10 +206,32 @@ async function main(): Promise<void> {
   const journalDirectory = process.env.DSH_DESKTOP_UPDATE_JOURNAL_DIR
   const updateJournal = journalDirectory === undefined ? undefined : new DesktopUpdateJournal(journalDirectory, app.getVersion())
   const resources = runtimeResources()
-  const paths = resolveDesktopPaths()
+  const dshHome = resolveDshHome()
+  const paths = resolveDesktopPaths(dshHome)
   const development = !app.isPackaged
   const activeProject = paths.profile
   const manager = new DesktopProjectManager(paths, resources)
+  // Archiving this machine's own sessions is a client capability with no
+  // dependence on the window: it is scheduled from the Harness home alone, and a
+  // machine that was never provisioned for it simply has no script to run.
+  const archiveConfig = resolveSessionArchiveConfig({ dshHome, environment: process.env })
+  const archive = archiveConfig === undefined
+    ? undefined
+    : new SessionArchive(resources.node, archiveConfig, dshHome, process.env)
+  /**
+   * Run one archive pass and report it.
+   *
+   * Failure is reported, never raised: the script's own output names what went
+   * wrong (no sessions yet, no token provisioned, deployment unreachable), and
+   * a client that cannot archive must still start and work.
+   */
+  const runArchiveNow = async (): Promise<void> => {
+    if (archive === undefined) return
+    const run = await archive.runNow()
+    const detail = run.output === '' ? 'no output' : run.output
+    if (run.ok) console.info(`desktop session archive: ${detail}`)
+    else console.error(`desktop session archive: failed (${run.code === undefined ? 'killed' : String(run.code)}): ${detail}`)
+  }
   // The deployment this window may show in server mode, and the mode the last
   // run left selected. Both are resolved before the first window exists, because
   // the document that window loads is what they decide.
@@ -716,6 +740,7 @@ async function main(): Promise<void> {
   powerMonitor.on('resume', automaticCheck)
   app.on('will-quit', () => {
     updateSchedule.dispose()
+    archive?.dispose()
     powerMonitor.off('resume', automaticCheck)
     updates.dispose()
   })
@@ -757,6 +782,12 @@ async function main(): Promise<void> {
     { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
     { type: 'separator' },
     { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
+    // The schedule is invisible while it works, so the same command is offered
+    // on demand; it shares the one in-flight guard with the timer.
+    ...archive === undefined ? [] : [{
+      label: currentDesktopLocale().messages.archiveNowMenu,
+      click: () => { void runArchiveNow() },
+    }],
     // Both modes are reachable from here, and the menu is rebuilt per popup, so
     // the radio marks the mode the window is showing right now.
     { label: currentDesktopLocale().messages.modeMenu, submenu: modeItems() },
@@ -926,6 +957,7 @@ async function main(): Promise<void> {
 
   mainWindow = createMainWindow()
   applyModeChrome()
+  archive?.start()
   const developmentPolicy = app.isPackaged ? undefined : process.env.DSH_DESKTOP_MANDATORY_UPDATE_CONFIG
   const policyInput: unknown = app.isPackaged
     ? ('dshMandatoryUpdatePolicy' in manifest ? manifest.dshMandatoryUpdatePolicy : undefined)

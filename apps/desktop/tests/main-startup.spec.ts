@@ -173,9 +173,15 @@ const harness = await vi.hoisted(async () => {
       windows.length = 0; hosts.length = 0; handlers.clear(); app.removeAllListeners()
       powerMonitor.removeAllListeners()
       app.isPackaged = true
-      // A mode or deployment written by one test must not decide the next one.
+      // A mode, deployment, or archive schedule written by one test must not
+      // decide the next one — and none of them may reach the developer's own
+      // Harness home, which the shell would otherwise read for both.
+      process.env.DSH_HOME = userData
+      delete process.env.HQZ_ARCHIVE_ORIGIN
+      delete process.env.DSH_DESKTOP_ARCHIVE_SCRIPT
       rmSync(join(userData, 'desktop-mode.json'), { force: true })
       rmSync(join(userData, 'desktop-client.json'), { force: true })
+      rmSync(join(userData, 'archive.json'), { force: true })
       windowFailure = undefined
       pluginsEnabled = false
       closeWindowsOnQuit = false
