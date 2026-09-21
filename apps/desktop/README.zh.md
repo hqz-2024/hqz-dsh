@@ -76,6 +76,20 @@ macOS 上自定义应用菜单还会声明标准的 File、Window 和应用菜�
 
 包事务独占 `$DSH_HOME/profiles/desktop/lock`，直到 pnpm 进程退出。pnpm 运行前，共享模块回退辅助函数只删除其拥有的链接，保留 pnpm 管理的目录；开发 Host 在启动时重建所需链接。链接清理保留目标目录。原生构建遵循 pnpm 配置的构建策略；发布准备使用独立的构建期允许列表。
 
+## 服务器模式
+
+同一个窗口显示两种文档之一：`dsh-app://app/` 是应用**自带**的本地部署，它的 Host 跑在这台机器上、模型面取这台机器的 Harness home；服务器模式则通过 HTTPS 加载一个**已有部署**的 Web UI，账号、工作区、会话与模型面都归那个部署管。只有服务器模式会画出外壳自有的模式徽标（shadow root，页面改不到它），徽标写着部署名、并带唯一一个动作「切回本地」—— **没有徽标就是本地模式**，窗口标题两种模式都会写明。
+
+部署地址按三层取，越具体越优先：`DSH_DESKTOP_SERVER_MODE`（部署对象本身的 JSON）、`<userData>/desktop-client.json`（`{ "server": { "origin": …, "label": …, "certificateSha256": … } }`）、以及应用清单里的 `dshDesktopServerMode` —— **最后一层就是打包烘进去的那个值**，所以装完的客户端不需要任何配置就指着自己的部署。上次选中的模式记在 `desktop-mode.json`，菜单里切换不需要重启 Host。
+
+信任被限定在配置的那个 origin 上，并按每次证书错误逐次判定：配了 `certificateSha256` 就拒绝任何别的证书；没配就接受该部署自己的证书并**报出指纹**，供运维事后钉住。导航不离开这个 origin —— 一份不是本外壳写的文档可以自由改写自己的路径 —— 其它目的地一律交给系统默认浏览器。
+
+打包时那个清单值由发布设置与本机共同决定：`DSH_DESKTOP_SERVER_ORIGIN` 优先，其次 `DSH_DESKTOP_SERVER_HOST`（配 `DSH_DESKTOP_SERVER_PORT`），再次 `DSH_LAN_IP`（本部署的启动脚本就设这个变量），都没有才用本机网卡地址（私网段优先），并逐个请求一次 `https://<地址>:8443/auth/me` —— **谁答就烘谁**。`DSH_DESKTOP_SERVER_MODE=none` 表示干脆不带部署；`DSH_DESKTOP_SERVER_LABEL` 决定标题与徽标上显示的名字。
+
+### 会话归档
+
+装过 `$DSH_HOME/client/export-session.mjs` 且配了归档地址的机器会归档自己的会话：启动 60 秒后第一次，之后每 6 小时一次，菜单里也能随时触发。每一轮只导出「大小或修改时间与上次不同」的会话、上传，并记进台账；**从没 provisioning 过的机器没有这个脚本，就什么都不归档**。失败只写控制台，**不阻塞启动、也不阻塞窗口**。
+
 ## 开发
 
 `dev:desktop` 会构建当前 Host、客户端 bundle、Web 前端和 Electron 壳，把已构建的 CLI 包、私有 Desktop Host 包及其 workspace 依赖投影为一次性桌面 npm 项目，然后直接启动 Electron；这条路径不从 npm 解析 dsh：

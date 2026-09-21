@@ -75,6 +75,20 @@ Native dialog details include at most 1,200 UTF-16 code units and eight diagnost
 Recovery waits for Host shutdown before changing plugin activation. The native recovery action calls the shared app-boot recovery function under the profile transaction lock. It disables third-party bundles and renames the profile’s `cordis.patch.yml` to `cordis.patch.yml.bak-<timestamp>` (with an ordinal on collisions) without parsing it; the next startup creates an empty patch. Installed packages and earlier backups remain. The home-level patch is unchanged. The Electron console records the backup path (or its absence) and the unchanged home-level patch. Invalid profile data, rename failures, or write failures are reported as recovery-operation errors; completed changes remain, and Desktop does not restart as though recovery succeeded. Desktop has no profile-reset action or emergency HTML document.
 
 
+## Server mode
+
+One window shows either the deployment the application carries or an existing one: `dsh-app://app/` is the bundled local deployment, whose Host runs on this machine and takes its model route from this machine's Harness home, while server mode loads an existing deployment's Web UI over HTTPS and lets that deployment own accounts, workspaces, sessions and the model route. Only server mode draws the shell-owned banner, whose shadow root the page cannot restyle, and that banner names the deployment and carries the single action returning to local mode — the absence of a banner is the local signal, and the window title names the mode either way.
+
+The deployment offered comes from three layers, most specific first: `DSH_DESKTOP_SERVER_MODE` (the deployment object itself, as JSON), `<userData>/desktop-client.json` (`{ "server": { "origin": …, "label": …, "certificateSha256": … } }`), then `dshDesktopServerMode` in the application manifest — the value packaging bakes, so an installed client points at its deployment with no configuration. `desktop-mode.json` remembers the mode the window was last left in, and the menu switches modes without restarting the Host.
+
+Trust is scoped to the configured origin and decided per certificate error: with `certificateSha256` every other certificate is refused, and without it the deployment's own certificate is accepted and the fingerprint reported, for an operator to pin afterwards. Navigation stays inside that origin, because a document this shell did not author rewrites its own path freely, and every other destination opens in the default browser.
+
+Packaging resolves that manifest value from release settings and this machine: `DSH_DESKTOP_SERVER_ORIGIN` wins, then `DSH_DESKTOP_SERVER_HOST` with `DSH_DESKTOP_SERVER_PORT`, then `DSH_LAN_IP` — the variable this deployment's launcher sets — and otherwise the machine's LAN addresses, private ranges first, each asked once at `https://<address>:8443/auth/me`, so the address that answers is the address baked. `DSH_DESKTOP_SERVER_MODE=none` bakes no deployment at all, and `DSH_DESKTOP_SERVER_LABEL` names it in the title and the banner.
+
+### Session archiving
+
+A machine provisioned with `$DSH_HOME/client/export-session.mjs` and a destination archives its own sessions: once 60 seconds after start, then every six hours, or on demand from the menu. Each pass exports the sessions whose size or modification time changed since the last one, uploads them, and records that in a ledger; a machine that was never provisioned has no script and archives nothing. Failures are reported in the console and never block startup or the window.
+
 ## Develop
 
 `dev:desktop` builds the current Host, client bundles, Web frontend, and Electron shell, projects the built CLI and private Desktop Host packages with their workspace dependencies into a disposable desktop npm project, and launches Electron without resolving dsh from npm:

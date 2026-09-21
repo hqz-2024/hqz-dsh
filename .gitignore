@@ -47,3 +47,6 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 native/system/test/bin/
+# 本地打包/调试残留：手工备份与桌面端 update journal（都不属于源码）
+*.bak-*
+.desktop-journal/
