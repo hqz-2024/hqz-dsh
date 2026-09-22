@@ -1289,7 +1289,9 @@ describe('desktop main startup', () => {
         profilePatchBackup: 'desktop-test-profile/cordis.patch.yml.bak-1789555200000', homePatch: 'unchanged',
       })
     } else {
-      expect(console.info).not.toHaveBeenCalled()
+      // The launch reports the mode it started in once; this path adds no
+      // recovery report on top of that.
+      expect(console.info).not.toHaveBeenCalledWith('Desktop profile recovery completed:', expect.anything())
     }
     expect(harness.dialog.showMessageBox).toHaveBeenCalledOnce()
     expect(harness.windows[0]!.urls).toEqual(['dsh-app://app/'])

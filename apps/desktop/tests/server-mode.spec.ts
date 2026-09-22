@@ -6,10 +6,10 @@ import {
   decideServerCertificate,
   isDesktopMode,
   normalizeFingerprint,
-  readDesktopMode,
   resolveDesktopServerModeConfig,
   resolveServerModeConfig,
   serverNavigationAllowed,
+  startupDesktopMode,
   writeDesktopMode,
 } from '../src/server-mode.ts'
 
@@ -118,21 +118,32 @@ describe('selected mode', () => {
   })
   afterEach(() => { rmSync(directory, { recursive: true, force: true }) })
 
-  it('starts local when nothing was stored', () => {
-    expect(readDesktopMode(modeFile)).toBe('local')
+  it('starts on the configured deployment until a mode is chosen', () => {
+    // A client packaged for a deployment opens on that deployment's own sign-in
+    // page; making a person find the menu first is not what an installed client
+    // is for.
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: true })).toBe('server')
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: false })).toBe('local')
   })
 
-  it('remembers the mode across a restart', () => {
+  it('remembers the mode across a restart, an explicit local mode included', () => {
     expect(writeDesktopMode(modeFile, 'server')).toBeUndefined()
     expect(JSON.parse(readFileSync(modeFile, 'utf8'))).toEqual({ mode: 'server' })
-    expect(readDesktopMode(modeFile)).toBe('server')
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: true })).toBe('server')
+    // Switching back to the bundled deployment is a decision, not an absence.
+    expect(writeDesktopMode(modeFile, 'local')).toBeUndefined()
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: true })).toBe('local')
   })
 
-  it('falls back to local rather than stranding the window on a damaged preference', () => {
+  it('starts local when the stored preference is damaged or names a deployment there is none of', () => {
     writeFileSync(modeFile, 'not json')
-    expect(readDesktopMode(modeFile)).toBe('local')
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: true })).toBe('server')
     writeFileSync(modeFile, JSON.stringify({ mode: 'somewhere' }))
-    expect(readDesktopMode(modeFile)).toBe('local')
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: true })).toBe('server')
+    // A remembered server mode with nothing to connect to would show an empty
+    // page, so the bundled deployment answers instead.
+    writeFileSync(modeFile, JSON.stringify({ mode: 'server' }))
+    expect(startupDesktopMode(modeFile, { deploymentConfigured: false })).toBe('local')
   })
 
   it('reports a write failure instead of refusing the switch the user already made', () => {

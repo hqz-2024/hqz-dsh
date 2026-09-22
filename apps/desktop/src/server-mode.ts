@@ -218,25 +218,36 @@ export function resolveServerModeConfig(options: {
 }
 
 /**
- * The mode the previous run left selected.
+ * The mode the next launch starts in.
  *
- * A stored mode that cannot be read, or that names something other than the two
- * modes, resolves to local: the local deployment is the one that always exists,
- * so a damaged preference must not strand the window on a server it cannot
- * reach.
+ * A preference the shell wrote wins, an explicit `local` included: a person who
+ * switched back to the bundled deployment meant it, and re-deciding for them on
+ * every launch would undo the switch. With nothing stored, a configured
+ * deployment is what the window shows — a client packaged for one is expected to
+ * open on that deployment's own sign-in page, which is the same thing its Web
+ * address serves — while a machine with no deployment has only the bundled one to
+ * show. A stored `server` with no deployment configured resolves to local, since
+ * a window pointed at nothing would render an empty page.
  * @param modeFile - file the shell wrote on the previous switch, if any.
+ * @param options.deploymentConfigured - whether any layer configured a deployment.
  * @returns the mode to start in.
  */
-export function readDesktopMode(modeFile: string): DesktopMode {
+export function startupDesktopMode(
+  modeFile: string,
+  options: { readonly deploymentConfigured: boolean },
+): DesktopMode {
   let stored: { mode?: unknown } | undefined
   try {
     stored = readJson(modeFile) as { mode?: unknown } | undefined
   } catch {
     // A preference the shell itself wrote and can no longer read is not worth
-    // failing a launch over; the local deployment always exists.
+    // failing a launch over; the configured deployment decides instead.
     stored = undefined
   }
-  return isDesktopMode(stored?.mode) ? stored.mode : 'local'
+  if (isDesktopMode(stored?.mode)) {
+    return stored.mode === 'server' && !options.deploymentConfigured ? 'local' : stored.mode
+  }
+  return options.deploymentConfigured ? 'server' : 'local'
 }
 
 /**

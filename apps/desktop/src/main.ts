@@ -35,9 +35,9 @@ import {
   certificateFingerprint256,
   decideServerCertificate,
   isDesktopMode,
-  readDesktopMode,
   resolveServerModeConfig,
   serverNavigationAllowed,
+  startupDesktopMode,
   writeDesktopMode,
   type DesktopMode,
 } from './server-mode.ts'
@@ -244,13 +244,10 @@ async function main(): Promise<void> {
     environmentValue: process.env.DSH_DESKTOP_SERVER_MODE,
     settingsFile: clientSettingsFile,
   })
-  let mode: DesktopMode = readDesktopMode(modeFile)
-  if (mode === 'server' && serverConfig === undefined) {
-    // A remembered server mode with nothing to connect to would show an empty
-    // window; local mode always exists, and the switch reports why.
-    console.warn('desktop server mode: no deployment is configured; starting in local mode')
-    mode = 'local'
-  }
+  let mode: DesktopMode = startupDesktopMode(modeFile, { deploymentConfigured: serverConfig !== undefined })
+  console.info(serverConfig === undefined
+    ? `desktop mode: starting in ${mode} mode; no deployment is configured`
+    : `desktop mode: starting in ${mode} mode for ${serverConfig.origin}`)
   let quitting = false
   let startup: Promise<void> | undefined
   let workspaceRecovery: Promise<void> | undefined

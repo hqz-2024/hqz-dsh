@@ -80,7 +80,7 @@ macOS 上自定义应用菜单还会声明标准的 File、Window 和应用菜�
 
 同一个窗口显示两种文档之一：`dsh-app://app/` 是应用**自带**的本地部署，它的 Host 跑在这台机器上、模型面取这台机器的 Harness home；服务器模式则通过 HTTPS 加载一个**已有部署**的 Web UI，账号、工作区、会话与模型面都归那个部署管。只有服务器模式会画出外壳自有的模式徽标（shadow root，页面改不到它），徽标写着部署名、并带唯一一个动作「切回本地」—— **没有徽标就是本地模式**，窗口标题两种模式都会写明。
 
-部署地址按三层取，越具体越优先：`DSH_DESKTOP_SERVER_MODE`（部署对象本身的 JSON）、`<userData>/desktop-client.json`（`{ "server": { "origin": …, "label": …, "certificateSha256": … } }`）、以及应用清单里的 `dshDesktopServerMode` —— **最后一层就是打包烘进去的那个值**，所以装完的客户端不需要任何配置就指着自己的部署。上次选中的模式记在 `desktop-mode.json`，菜单里切换不需要重启 Host。
+部署地址按三层取，越具体越优先：`DSH_DESKTOP_SERVER_MODE`（部署对象本身的 JSON）、`<userData>/desktop-client.json`（`{ "server": { "origin": …, "label": …, "certificateSha256": … } }`）、以及应用清单里的 `dshDesktopServerMode` —— **最后一层就是打包烘进去的那个值**，所以装完的客户端不需要任何配置就指着自己的部署。之后选过什么就记在 `desktop-mode.json`（包括显式选回本地模式），菜单里切换不需要重启 Host；而**没选过模式的机器开在配置好的部署上** —— 这就是装完的客户端显示部署的登录页、而不是自带应用的原因。
 
 信任被限定在配置的那个 origin 上，并按每次证书错误逐次判定：配了 `certificateSha256` 就拒绝任何别的证书；没配就接受该部署自己的证书并**报出指纹**，供运维事后钉住。导航不离开这个 origin —— 一份不是本外壳写的文档可以自由改写自己的路径 —— 其它目的地一律交给系统默认浏览器。
 
