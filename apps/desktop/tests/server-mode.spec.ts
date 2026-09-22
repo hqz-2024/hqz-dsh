@@ -178,6 +178,23 @@ describe('certificate trust', () => {
     expect(decideServerCertificate(config, 'not a url', PIN).accept).toBe(false)
   })
 
+  it('accepts the deployment stream on the same listener, which is what WSS uses', () => {
+    // One deployment serves one listener: the Web UI's document over HTTPS and its
+    // session stream over WSS. Comparing the whole origin refused every stream
+    // handshake, and a client on a machine without the deployment's root
+    // certificate then showed its UI reconnecting forever.
+    const stream = `wss://${new URL(ORIGIN).host}/api/stream`
+    expect(decideServerCertificate({ origin: ORIGIN }, stream, OTHER).accept).toBe(true)
+    expect(decideServerCertificate(config, stream, PIN).accept).toBe(true)
+    expect(decideServerCertificate(config, stream, OTHER).accept).toBe(false)
+  })
+
+  it('keeps trust off another host, another port, and another protocol', () => {
+    expect(decideServerCertificate(config, 'wss://evil.example:8443/api', PIN).accept).toBe(false)
+    expect(decideServerCertificate(config, `wss://${new URL(ORIGIN).hostname}:8444/api`, PIN).accept).toBe(false)
+    expect(decideServerCertificate(config, 'ftp://192.168.28.239:8443/', PIN).accept).toBe(false)
+  })
+
   it('refuses a certificate the caller could not read', () => {
     expect(decideServerCertificate(config, `${ORIGIN}/`, undefined).accept).toBe(false)
   })

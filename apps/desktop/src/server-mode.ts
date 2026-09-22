@@ -21,6 +21,12 @@ import { X509Certificate } from 'node:crypto'
 /** The two documents one Desktop window can show. */
 export const DESKTOP_MODES = ['local', 'server'] as const
 
+/**
+ * Schemes one deployment serves through one certificate: the Web UI's document
+ * over HTTPS, its session stream over WSS.
+ */
+const DEPLOYMENT_PROTOCOLS = ['https:', 'wss:']
+
 /** Which deployment the window is currently showing. */
 export type DesktopMode = (typeof DESKTOP_MODES)[number]
 
@@ -281,12 +287,18 @@ export interface CertificateDecision {
 /**
  * Decide whether to trust a certificate the network stack rejected.
  *
- * The trust question is scoped to the configured origin: another host's failure
- * is never accepted here, and a pinned deployment accepts only the pinned
+ * The trust question is scoped to the configured deployment: another host's
+ * failure is never accepted here, and a pinned deployment accepts only the pinned
  * certificate. Without a pin the deployment's self-signed certificate is
- * accepted for its own origin — the same trust a client gives by installing the
- * deployment's root certificate — and the fingerprint is reported so an
- * operator can pin it afterwards.
+ * accepted for its own address — the same trust a client gives by installing the
+ * deployment's root certificate — and the fingerprint is reported so an operator
+ * can pin it afterwards.
+ *
+ * Scope is the deployment's host and port rather than its scheme. One deployment
+ * serves one listener: the Web UI's document arrives over HTTPS and its session
+ * stream over WSS, both through the same certificate. Comparing the whole origin
+ * refused every `wss:` handshake, which left a client on a machine that does not
+ * trust the deployment's root showing the UI reconnecting forever.
  *
  * The fingerprint is an argument rather than read from Electron's certificate
  * here, so the decision is a pure function of the three facts it turns on and
@@ -307,7 +319,10 @@ export function decideServerCertificate(
   } catch {
     return { accept: false, reason: `unreadable URL for a certificate error: ${url}` }
   }
-  if (requested.origin !== config.origin) {
+  if (!DEPLOYMENT_PROTOCOLS.includes(requested.protocol)) {
+    return { accept: false, reason: `certificate error outside ${config.origin}: ${requested.protocol}` }
+  }
+  if (requested.host !== new URL(config.origin).host) {
     return { accept: false, reason: `certificate error outside ${config.origin}: ${requested.origin}` }
   }
   if (fingerprint === undefined) {

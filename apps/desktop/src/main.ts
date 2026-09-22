@@ -42,6 +42,7 @@ import {
   type DesktopMode,
 } from './server-mode.ts'
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
+import { DesktopLog } from './desktop-log.ts'
 import { DesktopUpdateJournal } from './update-journal.ts'
 import { DesktopUpdatePreparationError } from './update-error.ts'
 import { DesktopUpdateSchedule, resolveDesktopUpdateScheduleConfig } from './update-schedule.ts'
@@ -61,6 +62,17 @@ let windowsLanguage: string | undefined
 function currentDesktopLocale(): ReturnType<typeof resolveDesktopLocale> {
   return resolveDesktopLocale(windowsLanguage ?? app.getLocale())
 }
+// Beside the shell's own state, so a machine that shows the wrong document can
+// hand over the lines that say which mode it chose and why it refused a
+// certificate. The console carries the same lines for a terminal launch.
+const log = new DesktopLog(join(app.getPath('userData'), 'desktop.log'))
+
+/** Report one line to both the console and this installation's log. */
+function note(message: string): void {
+  console.info(message)
+  log.info(message)
+}
+
 const recovery = new DesktopFatalRecovery({
   messages: () => currentDesktopLocale().messages,
   show: options => dialog.showMessageBox(options),
@@ -76,6 +88,7 @@ const recovery = new DesktopFatalRecovery({
 
 function reportFatal(error: unknown): void {
   console.error(error)
+  log.error('fatal', error)
   if (shuttingDown) return
   void recovery.report(error).catch((failure: unknown) => { console.error(failure); app.exit(1) })
 }
@@ -229,8 +242,8 @@ async function main(): Promise<void> {
     if (archive === undefined) return
     const run = await archive.runNow()
     const detail = run.output === '' ? 'no output' : run.output
-    if (run.ok) console.info(`desktop session archive: ${detail}`)
-    else console.error(`desktop session archive: failed (${run.code === undefined ? 'killed' : String(run.code)}): ${detail}`)
+    if (run.ok) note(`desktop session archive: ${detail}`)
+    else log.error(`desktop session archive: failed (${run.code === undefined ? 'killed' : String(run.code)})`, detail)
   }
   // The deployment this window may show in server mode, and the mode the last
   // run left selected. Both are resolved before the first window exists, because
@@ -245,7 +258,7 @@ async function main(): Promise<void> {
     settingsFile: clientSettingsFile,
   })
   let mode: DesktopMode = startupDesktopMode(modeFile, { deploymentConfigured: serverConfig !== undefined })
-  console.info(serverConfig === undefined
+  note(serverConfig === undefined
     ? `desktop mode: starting in ${mode} mode; no deployment is configured`
     : `desktop mode: starting in ${mode} mode for ${serverConfig.origin}`)
   let quitting = false
@@ -449,7 +462,13 @@ async function main(): Promise<void> {
    * @param next - the mode to show.
    */
   const switchMode = async (next: DesktopMode): Promise<void> => {
-    if (switching || next === mode) return
+    if (switching) {
+      // Swallowing this silently is what made a stuck switch look like a dead
+      // button, so the ignored request is written down where a report can find it.
+      note(`desktop mode: ignoring a switch to ${next}; one is already running`)
+      return
+    }
+    if (next === mode) return
     if (next === 'server' && serverConfig === undefined) {
       await ordinaryMessageBox({
         type: 'info', title: messages.modeUnavailableTitle, message: messages.modeUnavailableDetail,
@@ -457,6 +476,7 @@ async function main(): Promise<void> {
       return
     }
     switching = true
+    note(`desktop mode: switching to ${next}`)
     try {
       mode = next
       const failure = writeDesktopMode(modeFile, mode)
@@ -468,6 +488,7 @@ async function main(): Promise<void> {
       publishMode()
       await reconcileBackend()
       publishMode()
+      note(`desktop mode: now showing ${next}`)
     } finally { switching = false }
   }
   const reportServerModeLoaded = (): void => {
@@ -562,7 +583,7 @@ async function main(): Promise<void> {
       fingerprint = undefined
     }
     const decision = decideServerCertificate(serverConfig, url, fingerprint)
-    console.info(`desktop server mode: ${decision.reason}`)
+    note(`desktop server mode: ${decision.reason}`)
     if (!decision.accept) return
     event.preventDefault()
     callback(true)
@@ -575,7 +596,17 @@ async function main(): Promise<void> {
     if (mainWindow === undefined || event.sender !== mainWindow.webContents
       || event.senderFrame === null || event.senderFrame !== mainWindow.webContents.mainFrame) return
     if (!isDesktopMode(requested)) return
-    void switchMode(requested)
+    // A switch that fails has to say so: the banner's action is the only way back
+    // to the bundled deployment from a document this shell does not control.
+    void switchMode(requested).catch(async (error: unknown) => {
+      log.error(`desktop mode: switching to ${requested} failed`, error)
+      await ordinaryMessageBox({
+        type: 'error',
+        title: messages.switchFailedTitle,
+        message: messages.switchFailedDetail,
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
   })
 
   ipcMain.handle(DESKTOP_IPC.boot, async (event) => {

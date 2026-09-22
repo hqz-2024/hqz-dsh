@@ -82,7 +82,7 @@ macOS 上自定义应用菜单还会声明标准的 File、Window 和应用菜�
 
 部署地址按三层取，越具体越优先：`DSH_DESKTOP_SERVER_MODE`（部署对象本身的 JSON）、`<userData>/desktop-client.json`（`{ "server": { "origin": …, "label": …, "certificateSha256": … } }`）、以及应用清单里的 `dshDesktopServerMode` —— **最后一层就是打包烘进去的那个值**，所以装完的客户端不需要任何配置就指着自己的部署。之后选过什么就记在 `desktop-mode.json`（包括显式选回本地模式），菜单里切换不需要重启 Host；而**没选过模式的机器开在配置好的部署上** —— 这就是装完的客户端显示部署的登录页、而不是自带应用的原因。
 
-信任被限定在配置的那个 origin 上，并按每次证书错误逐次判定：配了 `certificateSha256` 就拒绝任何别的证书；没配就接受该部署自己的证书并**报出指纹**，供运维事后钉住。导航不离开这个 origin —— 一份不是本外壳写的文档可以自由改写自己的路径 —— 其它目的地一律交给系统默认浏览器。
+信任被限定在这个部署的**主机与端口**上（同一个监听端口既供文档走 HTTPS、也供会话流走 WSS），并按每次证书错误逐次判定：配了 `certificateSha256` 就拒绝任何别的证书；没配就接受该部署自己的证书并**报出指纹**，供运维事后钉住。导航不离开这个 origin —— 一份不是本外壳写的文档可以自由改写自己的路径 —— 其它目的地一律交给系统默认浏览器。选中的模式、每一次证书判定、以及每一次失败的切换都会追加到与客户端设置文件同目录的 `desktop.log`，所以"窗口显示得不对"的机器可以直接把原因交出来。
 
 打包时那个清单值由发布设置与本机共同决定：`DSH_DESKTOP_SERVER_ORIGIN` 优先，其次 `DSH_DESKTOP_SERVER_HOST`（配 `DSH_DESKTOP_SERVER_PORT`），再次 `DSH_LAN_IP`（本部署的启动脚本就设这个变量），都没有才用本机网卡地址（私网段优先），并逐个请求一次 `https://<地址>:8443/auth/me` —— **谁答就烘谁**。`DSH_DESKTOP_SERVER_MODE=none` 表示干脆不带部署；`DSH_DESKTOP_SERVER_LABEL` 决定标题与徽标上显示的名字。
 
