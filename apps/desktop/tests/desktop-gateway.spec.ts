@@ -5,15 +5,18 @@ import { join } from 'node:path'
 import { resolveDesktopGatewayConfig, seedDesktopGateway } from '../src/desktop-gateway.ts'
 
 const CONFIG = { origin: 'https://192.168.28.239:8443', models: ['deepseek-v4-flash', 'deepseek-v4-pro'], token: 'gw-test' }
+const AUTHORITY = '-----BEGIN CERTIFICATE-----\ncaddy-root\n-----END CERTIFICATE-----\n'
 
 let home: string
 let patch: string
 let credentials: string
+let authority: string
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'dsh-desktop-gateway-'))
   patch = join(home, 'profiles', 'desktop', 'cordis.patch.yml')
   credentials = join(home, '.credentials.yaml')
+  authority = join(home, 'profiles', 'desktop', 'gateway-ca.crt')
 })
 afterEach(() => { rmSync(home, { recursive: true, force: true }) })
 
@@ -25,6 +28,19 @@ it('accepts only a route it can actually use', () => {
     { origin: 'https://h.example:8443', models: [] }, { origin: 'http://h.example:8443', models: ['m'] },
     { origin: 'https://h.example:8443', models: [7] }, { origin: 'https://h.example:8443', models: ['m'], token: '' }]) {
     expect(resolveDesktopGatewayConfig(value)).toBeUndefined()
+  }
+})
+
+it('takes the deployment certificate when the build carries one and ignores anything else', () => {
+  const route = { origin: 'https://h.example:8443', models: ['m'] }
+  expect(resolveDesktopGatewayConfig({ ...route, certificateAuthority: AUTHORITY })?.certificateAuthority).toBe(AUTHORITY)
+  // A value that is not a certificate costs this machine the anchor, never the route:
+  // without a route it could not reach a model at all, and packaging refuses to bake
+  // a value that is not a certificate in the first place.
+  for (const value of [undefined, null, 7, '', 'not a certificate', '-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n']) {
+    const resolved = resolveDesktopGatewayConfig({ ...route, certificateAuthority: value })
+    expect(resolved?.origin).toBe('https://h.example:8443')
+    expect(resolved?.certificateAuthority).toBeUndefined()
   }
 })
 
@@ -101,4 +117,45 @@ it('writes nothing on a second launch', () => {
   const again = seedDesktopGateway(home, CONFIG)
   expect(again.written).toEqual([])
   expect(again.kept).toEqual([patch, credentials])
+})
+
+it('writes the deployment authority this build trusts and reports where it is', () => {
+  const seed = seedDesktopGateway(home, { ...CONFIG, certificateAuthority: AUTHORITY })
+  expect(seed.certificateAuthority).toBe(authority)
+  expect(seed.written).toEqual([patch, credentials, authority])
+  expect(readFileSync(authority, 'utf8')).toBe(AUTHORITY)
+})
+
+it('replaces an authority the deployment no longer signs with', () => {
+  // A machine that kept the previous authority would refuse the certificate the
+  // deployment presents now, so this file follows the build rather than its owner.
+  mkdirSync(join(home, 'profiles', 'desktop'), { recursive: true })
+  writeFileSync(authority, 'stale')
+  const seed = seedDesktopGateway(home, { ...CONFIG, certificateAuthority: AUTHORITY })
+  expect(readFileSync(authority, 'utf8')).toBe(AUTHORITY)
+  expect(seed.written).toContain(authority)
+
+  const again = seedDesktopGateway(home, { ...CONFIG, certificateAuthority: AUTHORITY })
+  expect(again.kept).toEqual([patch, credentials, authority])
+  expect(again.written).toEqual([])
+})
+
+it('reports no authority for a build that carries none', () => {
+  expect(seedDesktopGateway(home, CONFIG).certificateAuthority).toBeUndefined()
+  expect(() => readFileSync(authority, 'utf8')).toThrow()
+})
+
+it('keeps a provisioned authority a build without one does not replace', () => {
+  // A machine pointed at another deployment by client/provision-client.ps1 holds
+  // that deployment's authority, which this build has never seen.
+  mkdirSync(join(home, 'profiles', 'desktop'), { recursive: true })
+  writeFileSync(authority, AUTHORITY)
+  const seed = seedDesktopGateway(home, CONFIG)
+  expect(seed.certificateAuthority).toBe(authority)
+  expect(seed.kept).toEqual([authority])
+  expect(seed.written).toEqual([patch, credentials])
+  // A file that is not a certificate is not a trust anchor, and saying so keeps a
+  // broken provisioning run visible instead of silently trusting nothing.
+  writeFileSync(authority, 'stale')
+  expect(seedDesktopGateway(home, CONFIG).certificateAuthority).toBeUndefined()
 })

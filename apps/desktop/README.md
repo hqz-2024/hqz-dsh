@@ -87,7 +87,9 @@ Packaging resolves that manifest value from release settings and this machine: `
 
 ### Local mode's model route
 
-Local mode runs the agent loop on this machine and sends every model request to the deployment's gateway, so packaging resolves that route as well — origin, models, and, when the build was given one, the gateway credential — into `dshDesktopGateway`. The first launch writes `settings.yaml` and `.credentials.yaml` into the Harness home when they are absent, which is what makes an installed client usable with no setup at all; a machine that already has them keeps them, and `client/provision-client.ps1` remains how one machine is pointed somewhere else.
+Local mode runs the agent loop on this machine and sends every model request to the deployment's gateway, so packaging resolves that route as well — origin, models, and, when the build was given one, the gateway credential — into `dshDesktopGateway`. The first launch writes the route into the profile's patch layer and the credential into `.credentials.yaml`, which is what makes an installed client usable with no setup at all; a machine whose provider is already configured keeps what it has, and `client/provision-client.ps1` remains how one machine is pointed somewhere else.
+
+Node reads no operating-system trust store, so a deployment behind its own TLS terminator is unreachable from the local Host — the process that sends model requests, which the shell's acceptance of that certificate for its own windows does not cover. Packaging therefore bakes the authority that terminator chains to, named by `DSH_DESKTOP_GATEWAY_CA_FILE`, into the same manifest value; the first launch writes it to `profiles/desktop/gateway-ca.crt` and starts the Host and the archive script with `NODE_EXTRA_CA_CERTS` pointing at it. A build that carries an authority replaces whatever an older build or provisioning left there, and a build that carries none leaves it alone — which is how a machine provisioning pointed at another deployment keeps trusting that one.
 
 ### Session archiving
 

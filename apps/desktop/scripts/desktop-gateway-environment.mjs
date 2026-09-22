@@ -13,7 +13,19 @@
  * leaves the deployment's own authenticated download page. Leaving the setting
  * empty keeps the credential out of the artifact and leaves each machine to
  * `client/provision-client.ps1`.
+ *
+ * A deployment behind a TLS terminator is one more fact of the same kind. The
+ * certificate the terminator presents is signed by its own authority, which no
+ * operating system trusts, and Node reads no operating-system trust store at all.
+ * The shell accepts the deployment's certificate for its own windows, but the
+ * process that actually sends model requests is a separate Node process the shell
+ * starts, so the trust anchor has to travel with the artifact too.
  */
+
+import { readFileSync } from 'node:fs'
+
+/** A file that starts and ends with a certificate block, so a key or a stray file is refused. */
+const PEM_CERTIFICATE = /^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----$/u
 
 /** Default model identifiers the deployment's gateway publishes. */
 export const DESKTOP_GATEWAY_DEFAULT_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro']
@@ -39,13 +51,38 @@ export function resolveDesktopGatewayOrigin(value, name) {
 }
 
 /**
+ * Read the trust anchor a client needs to reach this gateway.
+ *
+ * A named file is a deliberate setting, so an unreadable or non-certificate one
+ * stops the build instead of shipping a client that cannot complete a handshake.
+ * @param {NodeJS.ProcessEnv} environment File-owned release settings.
+ * @returns {string | undefined} Normalized PEM text, or undefined when the build names none.
+ * @throws when the setting is present but not a readable PEM certificate file.
+ */
+export function resolveDesktopGatewayCertificateAuthority(environment) {
+  const path = (environment.DSH_DESKTOP_GATEWAY_CA_FILE ?? '').trim()
+  if (path === '') return undefined
+  let contents
+  try {
+    contents = readFileSync(path, 'utf8')
+  } catch {
+    throw new Error(`desktop package: cannot read DSH_DESKTOP_GATEWAY_CA_FILE ${path}`)
+  }
+  const pem = contents.replace(/\r\n?/gu, '\n').trim()
+  if (!PEM_CERTIFICATE.test(pem)) {
+    throw new Error(`desktop package: DSH_DESKTOP_GATEWAY_CA_FILE ${path} is not a PEM certificate`)
+  }
+  return `${pem}\n`
+}
+
+/**
  * Resolve the local-mode model route from release settings.
  *
  * The gateway lives on the deployment server mode connects to, so its origin
  * defaults to that one and an operator only names it to split the two.
  * @param {NodeJS.ProcessEnv} environment File-owned release settings.
  * @param {string | undefined} serverOrigin Origin resolved for server mode, if any.
- * @returns {{ origin: string, models: string[], token?: string } | undefined} The route to bake, or undefined when this deployment bakes none.
+ * @returns {{ origin: string, models: string[], token?: string, certificateAuthority?: string } | undefined} The route to bake, or undefined when this deployment bakes none.
  * @throws when a value is present but unusable.
  */
 export function resolveDesktopGatewayEnvironment(environment, serverOrigin) {
@@ -67,5 +104,11 @@ export function resolveDesktopGatewayEnvironment(environment, serverOrigin) {
     : configuredModels.split(',').map(model => model.trim()).filter(model => model !== '')
   if (models.length === 0) throw new Error('desktop package: DSH_DESKTOP_GATEWAY_MODELS must name at least one model')
   const token = (environment.DSH_DESKTOP_GATEWAY_TOKEN ?? '').trim()
-  return { origin, models, ...(token === '' ? {} : { token }) }
+  const certificateAuthority = resolveDesktopGatewayCertificateAuthority(environment)
+  return {
+    origin,
+    models,
+    ...(token === '' ? {} : { token }),
+    ...(certificateAuthority === undefined ? {} : { certificateAuthority }),
+  }
 }

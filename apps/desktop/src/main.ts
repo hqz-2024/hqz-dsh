@@ -22,6 +22,7 @@ import { resolveDesktopPaths } from './paths.ts'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { DesktopProjectManager } from './project-manager.ts'
 import { DesktopHostProcess, DesktopHostUncleanExitError } from './host-process.ts'
+import { withCertificateAuthority } from './node-environment.ts'
 import { installDesktopDirectoryPicker } from './directory-picker.ts'
 import { DesktopBackendController } from './backend-controller.ts'
 import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopModePresentation, type DesktopUpdateState } from './ipc.ts'
@@ -225,13 +226,31 @@ async function main(): Promise<void> {
   const development = !app.isPackaged
   const activeProject = paths.profile
   const manager = new DesktopProjectManager(paths, resources)
+  // Resolved before anything that talks to the deployment starts: local mode asks
+  // the deployment for its models, so the route and the certificate its terminator
+  // presents have to be in place first — otherwise the bundled application opens
+  // asking for an API key this machine does not have and should not need.
+  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
+  const gateway = resolveDesktopGatewayConfig('dshDesktopGateway' in manifest ? manifest.dshDesktopGateway : undefined)
+  let trustAnchor: string | undefined
+  if (gateway === undefined) {
+    note('desktop gateway: this build carries no model route; local mode needs client/provision-client.ps1')
+  } else {
+    const seed = seedDesktopGateway(dshHome, gateway)
+    trustAnchor = seed.certificateAuthority
+    const trusted = trustAnchor === undefined ? 'this build carries no certificate to trust' : `trusting ${trustAnchor}`
+    const configured = seed.written.length === 0 ? 'this machine is already configured' : `wrote ${seed.written.join(', ')}`
+    note(`desktop gateway: ${gateway.origin} (${gateway.models.join(', ')}); ${trusted}; ${configured}`)
+  }
+  const deploymentEnvironment = withCertificateAuthority(process.env, trustAnchor)
   // Archiving this machine's own sessions is a client capability with no
   // dependence on the window: it is scheduled from the Harness home alone, and a
   // machine that was never provisioned for it simply has no script to run.
   const archiveConfig = resolveSessionArchiveConfig({ dshHome, environment: process.env })
   const archive = archiveConfig === undefined
     ? undefined
-    : new SessionArchive(resources.node, archiveConfig, dshHome, process.env)
+    : new SessionArchive(resources.node, archiveConfig, dshHome, deploymentEnvironment)
   /**
    * Run one archive pass and report it.
    *
@@ -251,8 +270,6 @@ async function main(): Promise<void> {
   // the document that window loads is what they decide.
   const clientSettingsFile = join(app.getPath('userData'), 'desktop-client.json')
   const modeFile = join(app.getPath('userData'), 'desktop-mode.json')
-  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
-  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
   const serverConfig = resolveServerModeConfig({
     manifestValue: 'dshDesktopServerMode' in manifest ? manifest.dshDesktopServerMode : undefined,
     environmentValue: process.env.DSH_DESKTOP_SERVER_MODE,
@@ -262,17 +279,6 @@ async function main(): Promise<void> {
   note(serverConfig === undefined
     ? `desktop mode: starting in ${mode} mode; no deployment is configured`
     : `desktop mode: starting in ${mode} mode for ${serverConfig.origin}`)
-  // Local mode asks the deployment for its models, so the route has to exist
-  // before the Host starts — otherwise the bundled application opens asking for an
-  // API key that this machine does not have and should not need.
-  const gateway = resolveDesktopGatewayConfig('dshDesktopGateway' in manifest ? manifest.dshDesktopGateway : undefined)
-  if (gateway !== undefined) {
-    const seed = seedDesktopGateway(dshHome, gateway)
-    note(`desktop gateway: ${gateway.origin} (${gateway.models.join(', ')})`
-      + `${seed.written.length === 0 ? '; this machine is already configured' : `; wrote ${seed.written.join(', ')}`}`)
-  } else {
-    note('desktop gateway: this build carries no model route; local mode needs client/provision-client.ps1')
-  }
   let quitting = false
   let startup: Promise<void> | undefined
   let workspaceRecovery: Promise<void> | undefined
@@ -339,9 +345,9 @@ async function main(): Promise<void> {
     window.setTitleBarOverlay(mode === 'server'
       ? { color: '#f7c948', symbolColor: '#3b2600' }
       : {
-          color: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb',
-          symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
-        })
+        color: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb',
+        symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
+      })
   }
   const assertProductSender = (event: IpcMainInvokeEvent): void => {
     assertDesktopSender(event, ['app'])
@@ -368,7 +374,7 @@ async function main(): Promise<void> {
   const backend = new DesktopBackendController((onFailure) => {
     const hostInspectPort = developmentHostInspectPort(development)
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
-      hostInspectPort, process.env, onFailure,
+      hostInspectPort, deploymentEnvironment, onFailure,
       development ? join(app.getAppPath(), '.desktop-build', 'targets', `${process.platform === 'darwin' ? 'mac' : 'win'}-${process.arch}`, 'runtime', 'primary-runtime')
         : join(process.resourcesPath, 'runtime', 'primary-runtime'),
       development ? 'link' : 'runtime', resources)

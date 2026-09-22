@@ -18,6 +18,14 @@
  * The credential is the one fact that lives in its own file, because it is not
  * configuration: `settings.yaml` names the reference, `.credentials.yaml` holds
  * the value.
+ *
+ * A deployment behind its own TLS terminator adds a third fact. The certificate
+ * that terminator presents chains to an authority no machine trusts, and Node
+ * reads no operating-system trust store, so the local Host — a separate process
+ * from the shell that accepted the certificate for its window — refuses to
+ * complete the handshake until it is told what to trust. The authority travels
+ * inside the build for the same reason the route does: an installed client needs
+ * no setup.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -31,6 +39,8 @@ export interface DesktopGatewayConfig {
   readonly models: readonly string[]
   /** Gateway credential, absent when the build carried none. */
   readonly token?: string
+  /** PEM certificate the deployment's terminator chains to, absent when the build carried none. */
+  readonly certificateAuthority?: string
 }
 
 /** What one pass did, for the launch log. */
@@ -39,6 +49,8 @@ export interface DesktopGatewaySeed {
   readonly written: readonly string[]
   /** Files left untouched, with why. */
   readonly kept: readonly string[]
+  /** Trust anchor the local Host must be given, when this build carried one. */
+  readonly certificateAuthority?: string
 }
 
 /** Credential reference the patch names as the adapter's API-key source. */
@@ -49,6 +61,12 @@ const ADAPTER_ROW = 'llm-deepseek'
 
 /** Row id carrying the default model selection. */
 const DEFAULT_MODEL_ROW = 'agent-default-model'
+
+/** Trust-anchor file this application owns inside the profile directory. */
+const CERTIFICATE_AUTHORITY_FILE = 'gateway-ca.crt'
+
+/** A certificate block, which is what makes a file usable as a trust anchor. */
+const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/u
 
 /**
  * Parse one manifest value.
@@ -67,10 +85,16 @@ export function resolveDesktopGatewayConfig(value: unknown): DesktopGatewayConfi
   let parsed: URL
   try { parsed = new URL(origin) } catch { return undefined }
   if (parsed.protocol !== 'https:') return undefined
+  // An unusable authority costs this machine its model route if the whole route is
+  // refused over it, and packaging already refuses to bake one that is not a
+  // certificate. Keeping the route without it leaves a failure that names TLS.
+  const authority = record.certificateAuthority
+  const usableAuthority = typeof authority === 'string' && PEM_CERTIFICATE.test(authority) ? authority : undefined
   return {
     origin: parsed.origin,
     models: models as string[],
     ...(token === undefined ? {} : { token: token as string }),
+    ...(usableAuthority === undefined ? {} : { certificateAuthority: usableAuthority }),
   }
 }
 
@@ -171,7 +195,7 @@ function seedCredential(path: string, config: DesktopGatewayConfig): string | un
  * Put the route and its credential where the runtime reads them.
  * @param dshHome - Harness home the local Host reads.
  * @param config - the route packaging baked.
- * @returns Which files were written and which were kept.
+ * @returns Which files were written and which were kept, and the trust anchor to pass on.
  */
 export function seedDesktopGateway(dshHome: string, config: DesktopGatewayConfig): DesktopGatewaySeed {
   const patch = join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml')
@@ -186,5 +210,52 @@ export function seedDesktopGateway(dshHome: string, config: DesktopGatewayConfig
     if (credentialResult === undefined) kept.push(credentials)
     else written.push(credentialResult)
   }
-  return { written, kept }
+  // A build that carries no authority of its own leaves whatever one provisioning
+  // put here in place, which is how a machine pointed at another deployment — one
+  // whose certificate this build never saw — still trusts it.
+  const authority = config.certificateAuthority === undefined
+    ? existingCertificateAuthority(dshHome, kept)
+    : seedCertificateAuthority(dshHome, config.certificateAuthority, written, kept)
+  return { written, kept, ...(authority === undefined ? {} : { certificateAuthority: authority }) }
+}
+
+/**
+ * Write the deployment's certificate authority beside the profile that uses it.
+ *
+ * Unlike the patch, this file is not the owner's to configure: the deployment
+ * decides what signs its certificate, and a machine that kept an older authority
+ * would refuse the current one. The copy is therefore the build's, and a file
+ * that already holds it is left alone to keep the launch log honest.
+ * @param dshHome - Harness home the local Host reads.
+ * @param authority - PEM certificate packaging baked.
+ * @param written - Files this pass wrote, appended to.
+ * @param kept - Files this pass left alone, appended to.
+ * @returns The path the local Host must be pointed at.
+ */
+function seedCertificateAuthority(dshHome: string, authority: string, written: string[], kept: string[]): string {
+  const path = certificateAuthorityPath(dshHome)
+  if (existsSync(path) && readFileSync(path, 'utf8') === authority) kept.push(path)
+  else {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, authority, 'utf8')
+    written.push(path)
+  }
+  return path
+}
+
+/**
+ * Find the authority a machine was provisioned with.
+ * @param dshHome - Harness home the local Host reads.
+ * @param kept - Files this pass left alone, appended to.
+ * @returns The path when this machine already holds a usable certificate.
+ */
+function existingCertificateAuthority(dshHome: string, kept: string[]): string | undefined {
+  const path = certificateAuthorityPath(dshHome)
+  if (!existsSync(path) || !PEM_CERTIFICATE.test(readFileSync(path, 'utf8'))) return undefined
+  kept.push(path)
+  return path
+}
+
+function certificateAuthorityPath(dshHome: string): string {
+  return join(dshHome, 'profiles', 'desktop', CERTIFICATE_AUTHORITY_FILE)
 }

@@ -4,6 +4,8 @@ export interface DesktopGatewayDefault {
   models: string[]
   /** Gateway credential, present when the build was given one. */
   token?: string
+  /** PEM certificate the deployment's TLS terminator chains to, present when the build was given one. */
+  certificateAuthority?: string
 }
 
 /** Default model identifiers the deployment's gateway publishes. */
@@ -19,6 +21,13 @@ export const DESKTOP_GATEWAY_CREDENTIAL: string
  * @returns The normalized origin.
  */
 export function resolveDesktopGatewayOrigin(value: string, name: string): string
+
+/**
+ * Read the trust anchor a client needs to reach this gateway.
+ * @param environment File-owned release settings.
+ * @returns Normalized PEM text, or undefined when the build names none.
+ */
+export function resolveDesktopGatewayCertificateAuthority(environment: NodeJS.ProcessEnv): string | undefined
 
 /**
  * Resolve the local-mode model route from release settings.

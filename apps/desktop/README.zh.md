@@ -88,7 +88,9 @@ macOS 上自定义应用菜单还会声明标准的 File、Window 和应用菜�
 
 ### 本地模式的模型路由
 
-本地模式在这台机器上跑 agent 循环，每个模型请求都送到部署的网关，所以打包时也把这个路由解析出来 —— 地址、模型清单，以及（构建时给了就有）网关凭据 —— 写进应用清单的 `dshDesktopGateway`。首次启动时，`settings.yaml` 与 `.credentials.yaml` 若不存在就写进 Harness home，这正是"装完不用任何配置就能用"的原因；已经有这两个文件的机器保持原样，而 `client/provision-client.ps1` 仍然是把某一台机器改指到别处的方式。
+本地模式在这台机器上跑 agent 循环，每个模型请求都送到部署的网关，所以打包时也把这个路由解析出来 —— 地址、模型清单，以及（构建时给了就有）网关凭据 —— 写进应用清单的 `dshDesktopGateway`。首次启动时把路由写进 profile 的补丁层、把凭据写进 `.credentials.yaml`，这正是"装完不用任何配置就能用"的原因；已经自己配过模型提供方的机器保持原样，而 `client/provision-client.ps1` 仍然是把某一台机器改指到别处的方式。
+
+Node 不读操作系统的证书库，所以部署若用自己的 TLS 终结器，**本地 Host**（真正发模型请求的那个进程，外壳为自己窗口接受该证书并不覆盖它）就无法完成握手。为此打包会把终结器所链到的根证书（由 `DSH_DESKTOP_GATEWAY_CA_FILE` 指定）烘进同一个清单值；首次启动时写进 `profiles/desktop/gateway-ca.crt`，并让 Host 与归档脚本带着指向它的 `NODE_EXTRA_CA_CERTS` 启动。**带根证书的构建会覆盖**旧构建或 provisioning 留下的那一份，**不带根证书的构建则原样保留** —— 这正是被 provisioning 改指到另一个部署的机器仍然信任那个部署的原因。
 
 ### 会话归档
 
