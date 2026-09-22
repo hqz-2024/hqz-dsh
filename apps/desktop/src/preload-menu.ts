@@ -5,9 +5,16 @@ import { resolveDesktopLocale } from './locale.ts'
 
 /**
  * Mount the Windows caption menubar without moving focus out of the active editor.
- * @returns Language refresh and document teardown operations.
+ *
+ * The bar belongs to the window, not to one document: local mode mounts it once
+ * the application frame publishes its overlay seat, and server mode — whose
+ * document this shell did not author and which never publishes that seat — mounts
+ * it as soon as the shell reports that mode. Without that, a window showing a
+ * deployment loses the Application and Edit menus, and with them the only way to
+ * switch back that does not depend on the banner.
+ * @returns Language refresh, mode update, and document teardown operations.
  */
-export function installWindowsMenu(): { update(): void; dispose(): void } {
+export function installWindowsMenu(): { update(): void; setServerMode(value: boolean): void; dispose(): void } {
   const host = document.createElement('div')
   host.dataset.windowsMenu = ''
   const shadow = host.attachShadow({ mode: 'open' })
@@ -23,6 +30,12 @@ export function installWindowsMenu(): { update(): void; dispose(): void } {
     button:hover, button[aria-expanded=true] { background: var(--dsw-alias-interactive-bg-hover);
       color: var(--dsw-alias-label-primary); }
     button:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: -2px; }
+    /* Server mode paints the caption amber, so the bar follows that palette
+       rather than the deployment's own tokens. */
+    :host([data-server]) button { color: #3b2600; }
+    :host([data-server]) button:hover, :host([data-server]) button[aria-expanded=true] {
+      background: rgba(59, 38, 0, .14); color: #241700; }
+    :host([data-server]) button:focus-visible { outline-color: #3b2600; }
   `
   const bar = document.createElement('div')
   bar.setAttribute('role', 'menubar')
@@ -85,10 +98,14 @@ export function installWindowsMenu(): { update(): void; dispose(): void } {
   }
   const buttons = [createButton('application', 0), createButton('edit', 1)] as const
   shadow.append(style, bar)
+  let mounted = false
+  let serverMode = false
   const mount = (): void => {
-    // AppFrame owns this seat; boot readiness alone precedes the rendered application.
-    if (document.querySelector('[data-shell-overlay]') === null) return
+    // AppFrame owns the local seat, and boot readiness alone precedes the rendered
+    // application; server mode has no such seat to wait for.
+    if (mounted || (!serverMode && document.querySelector('[data-shell-overlay]') === null)) return
     document.body.append(host)
+    mounted = true
     observer.disconnect()
   }
   const observer = new MutationObserver(mount)
@@ -103,10 +120,16 @@ export function installWindowsMenu(): { update(): void; dispose(): void } {
   update()
   return {
     update,
+    setServerMode: (value: boolean) => {
+      serverMode = value
+      host.toggleAttribute('data-server', value)
+      mount()
+    },
     dispose: () => {
       observer.disconnect()
       document.removeEventListener('focusout', rememberEditor, true)
       host.remove()
+      mounted = false
     },
   }
 }

@@ -830,7 +830,13 @@ async function main(): Promise<void> {
 
   if (process.platform === 'win32') {
     ipcMain.handle(DESKTOP_IPC.windowsMenu, (event, name: unknown, x: unknown, y: unknown) => {
-      assertDesktopSender(event, ['app'])
+      // The caption menubar is shell UI drawn into whichever document the window
+      // shows, so this one request is accepted from the main window's own top
+      // frame rather than only from the bundled application: in server mode the
+      // bar stands in a deployment's page, and it pops a menu the person still
+      // has to click. The request itself carries no page-supplied authority — a
+      // menu name and two coordinates — and every other handler keeps the origin
+      // check.
       if (mainWindow === undefined || event.sender !== mainWindow.webContents
         || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('desktop menu: rejected sender')
       if ((name !== 'application' && name !== 'edit')

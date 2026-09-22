@@ -19,8 +19,15 @@ import { DESKTOP_IPC, type DesktopModePresentation } from './ipc.ts'
 /** Attribute on the banner host, so the shell and its tests share one handle. */
 export const MODE_BANNER_ATTRIBUTE = 'data-dsh-mode-banner'
 
-/** The pill's own stylesheet, applied inline because the page owns no class names here. */
-const PILL_STYLE = [
+/**
+ * The pill's own stylesheet, applied inline because the page owns no class names here.
+ *
+ * Exported for the regression test: jsdom, where the preload specs run, drops the
+ * non-standard `-webkit-app-region` while parsing, so a test that reads the pill's
+ * style back cannot see the one declaration that decides whether the operating
+ * system drags the window or the button receives the click.
+ */
+export const MODE_BANNER_PILL_STYLE = [
   'position:fixed',
   'top:8px',
   'left:50%',
@@ -37,6 +44,10 @@ const PILL_STYLE = [
   'pointer-events:auto',
   'user-select:none',
   'white-space:nowrap',
+  // The pill sits inside the native caption strip, which the operating system
+  // treats as a drag handle: without this the press moves the window and the
+  // button never sees a click. The caption menubar opts out the same way.
+  '-webkit-app-region:no-drag',
 ].join(';')
 
 /** The switch button's stylesheet. */
@@ -73,7 +84,7 @@ function render(ipc: IpcRenderer, presentation: DesktopModePresentation): void {
   const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' })
   root.replaceChildren()
   const pill = document.createElement('div')
-  pill.style.cssText = PILL_STYLE
+  pill.style.cssText = MODE_BANNER_PILL_STYLE
   const text = document.createElement('span')
   text.textContent = presentation.label === undefined
     ? presentation.text

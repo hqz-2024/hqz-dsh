@@ -37,7 +37,16 @@ syncNativeTheme()
 // caption its title bar would lose the menus and the window would give no sign
 // of which deployment it is showing. Both stay outside the gate above, which
 // guards only the privileged bridges.
-syncWindowsAppearance()
+const caption = syncWindowsAppearance()
 installModeBanner(ipcRenderer)
+// The caption menubar mounts itself once the application frame publishes its
+// overlay seat; server mode has no such seat, so the shell's own mode report is
+// what mounts it there.
+ipcRenderer.on(DESKTOP_IPC.mode, (_event, presentation: unknown) => {
+  if (typeof presentation !== 'object' || presentation === null) return
+  const value = presentation as { mode?: unknown }
+  if (value.mode !== 'local' && value.mode !== 'server') return
+  caption.setServerMode(value.mode === 'server')
+})
 // Main-process IPC also verifies the owning window and top frame.
 contextBridge.exposeInMainWorld('dshDesktop', location.protocol === `${SCHEME}:` && location.hostname === 'app' ? product : { protocolVersion: 1 })
