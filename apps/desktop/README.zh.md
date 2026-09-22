@@ -86,6 +86,10 @@ macOS 上自定义应用菜单还会声明标准的 File、Window 和应用菜�
 
 打包时那个清单值由发布设置与本机共同决定：`DSH_DESKTOP_SERVER_ORIGIN` 优先，其次 `DSH_DESKTOP_SERVER_HOST`（配 `DSH_DESKTOP_SERVER_PORT`），再次 `DSH_LAN_IP`（本部署的启动脚本就设这个变量），都没有才用本机网卡地址（私网段优先），并逐个请求一次 `https://<地址>:8443/auth/me` —— **谁答就烘谁**。`DSH_DESKTOP_SERVER_MODE=none` 表示干脆不带部署；`DSH_DESKTOP_SERVER_LABEL` 决定标题与徽标上显示的名字。
 
+### 本地模式的模型路由
+
+本地模式在这台机器上跑 agent 循环，每个模型请求都送到部署的网关，所以打包时也把这个路由解析出来 —— 地址、模型清单，以及（构建时给了就有）网关凭据 —— 写进应用清单的 `dshDesktopGateway`。首次启动时，`settings.yaml` 与 `.credentials.yaml` 若不存在就写进 Harness home，这正是"装完不用任何配置就能用"的原因；已经有这两个文件的机器保持原样，而 `client/provision-client.ps1` 仍然是把某一台机器改指到别处的方式。
+
 ### 会话归档
 
 装过 `$DSH_HOME/client/export-session.mjs` 且配了归档地址的机器会归档自己的会话：启动 60 秒后第一次，之后每 6 小时一次，菜单里也能随时触发。每一轮只导出「大小或修改时间与上次不同」的会话、上传，并记进台账；**从没 provisioning 过的机器没有这个脚本，就什么都不归档**。失败只写控制台，**不阻塞启动、也不阻塞窗口**。

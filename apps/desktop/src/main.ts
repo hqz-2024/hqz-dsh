@@ -43,6 +43,7 @@ import {
 } from './server-mode.ts'
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
 import { DesktopLog } from './desktop-log.ts'
+import { resolveDesktopGatewayConfig, seedDesktopGateway } from './desktop-gateway.ts'
 import { DesktopUpdateJournal } from './update-journal.ts'
 import { DesktopUpdatePreparationError } from './update-error.ts'
 import { DesktopUpdateSchedule, resolveDesktopUpdateScheduleConfig } from './update-schedule.ts'
@@ -261,6 +262,17 @@ async function main(): Promise<void> {
   note(serverConfig === undefined
     ? `desktop mode: starting in ${mode} mode; no deployment is configured`
     : `desktop mode: starting in ${mode} mode for ${serverConfig.origin}`)
+  // Local mode asks the deployment for its models, so the route has to exist
+  // before the Host starts — otherwise the bundled application opens asking for an
+  // API key that this machine does not have and should not need.
+  const gateway = resolveDesktopGatewayConfig('dshDesktopGateway' in manifest ? manifest.dshDesktopGateway : undefined)
+  if (gateway !== undefined) {
+    const seed = seedDesktopGateway(dshHome, gateway)
+    note(`desktop gateway: ${gateway.origin} (${gateway.models.join(', ')})`
+      + `${seed.written.length === 0 ? '; this machine is already configured' : `; wrote ${seed.written.join(', ')}`}`)
+  } else {
+    note('desktop gateway: this build carries no model route; local mode needs client/provision-client.ps1')
+  }
   let quitting = false
   let startup: Promise<void> | undefined
   let workspaceRecovery: Promise<void> | undefined

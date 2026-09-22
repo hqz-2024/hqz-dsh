@@ -85,6 +85,10 @@ Trust is scoped to the deployment's host and port — one listener serves the We
 
 Packaging resolves that manifest value from release settings and this machine: `DSH_DESKTOP_SERVER_ORIGIN` wins, then `DSH_DESKTOP_SERVER_HOST` with `DSH_DESKTOP_SERVER_PORT`, then `DSH_LAN_IP` — the variable this deployment's launcher sets — and otherwise the machine's LAN addresses, private ranges first, each asked once at `https://<address>:8443/auth/me`, so the address that answers is the address baked. `DSH_DESKTOP_SERVER_MODE=none` bakes no deployment at all, and `DSH_DESKTOP_SERVER_LABEL` names it in the title and the banner.
 
+### Local mode's model route
+
+Local mode runs the agent loop on this machine and sends every model request to the deployment's gateway, so packaging resolves that route as well — origin, models, and, when the build was given one, the gateway credential — into `dshDesktopGateway`. The first launch writes `settings.yaml` and `.credentials.yaml` into the Harness home when they are absent, which is what makes an installed client usable with no setup at all; a machine that already has them keeps them, and `client/provision-client.ps1` remains how one machine is pointed somewhere else.
+
 ### Session archiving
 
 A machine provisioned with `$DSH_HOME/client/export-session.mjs` and a destination archives its own sessions: once 60 seconds after start, then every six hours, or on demand from the menu. Each pass exports the sessions whose size or modification time changed since the last one, uploads them, and records that in a ledger; a machine that was never provisioned has no script and archives nothing. Failures are reported in the console and never block startup or the window.

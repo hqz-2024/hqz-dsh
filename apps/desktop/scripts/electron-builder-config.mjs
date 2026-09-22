@@ -18,6 +18,7 @@ import {
 import { resolveDesktopAutoUpdateConfig } from './desktop-auto-update-environment.mjs'
 import { resolveDesktopPolicyEnvironment } from './desktop-policy-environment.mjs'
 import { resolveDesktopServerModeEnvironment } from './desktop-server-mode-environment.mjs'
+import { resolveDesktopGatewayEnvironment } from './desktop-gateway-environment.mjs'
 import { desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { installWindowsDirectoryInstaller } from './windows-directory-installer.mjs'
 import { preserveWindowsRuntimeSignature } from './windows-runtime-signature.mjs'
@@ -44,6 +45,9 @@ export function createElectronBuilderConfig(
   const appId = resolveDesktopAppId(env)
   const policy = resolveDesktopPolicyEnvironment(env)
   const serverMode = resolveDesktopServerModeEnvironment(env)
+  // The gateway lives on the deployment server mode connects to, so a build that
+  // names one names the other unless an operator splits them.
+  const gateway = resolveDesktopGatewayEnvironment(env, serverMode?.origin)
   const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
   const resolvedPlatform = targetPlatform ?? hostPlatform
   const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
@@ -91,6 +95,7 @@ export function createElectronBuilderConfig(
           ...(serverMode.label === undefined ? {} : { label: serverMode.label }),
         },
       }),
+      ...(gateway === undefined ? {} : { dshDesktopGateway: gateway }),
     },
     productName: 'DeepSeek Harness',
     artifactName: 'deepseek-harness-${version}-${os}-${arch}.${ext}',
