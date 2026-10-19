@@ -434,7 +434,7 @@ export async function packageTarget(
   // Which deployment a client that was never configured connects to is a fact
   // about where this build runs, so it is settled — and, when detected rather
   // than configured, verified by asking the address — before any stage runs.
-  const serverMode = await resolveDesktopServerModeForBuild(environment, { log: message => { console.log(message) } })
+  const serverMode = await resolveDesktopServerModeForBuild(environment, { log: (message) => { console.log(message) } })
   const artifactsRoot = desktopArtifactOutput(buildPaths, invocation).directory
   const buildEnv = withoutWindowsSigningEnvironment(withoutDesktopUploadCredentials(
     desktopElectronBuilderEnvironment(serverMode.environment, invocation.unsigned)))

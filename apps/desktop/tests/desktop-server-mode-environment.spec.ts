@@ -82,7 +82,7 @@ it('prefers the candidate that answers over the one the machine lists first', as
   const log: string[] = []
   const selected = await selectReachableDesktopServerHost(['172.20.0.1', '192.168.28.239'], {
     port: 8443,
-    log: message => { log.push(message) },
+    log: (message) => { log.push(message) },
     probe: async origin => (origin.startsWith('https://192.168.28.239') ? 200 : undefined),
   })
   expect(selected).toEqual({ host: '192.168.28.239', origin: 'https://192.168.28.239:8443' })
@@ -107,7 +107,7 @@ it('keeps a candidate and warns when nothing answers, rather than failing the bu
   const built = await resolveDesktopServerModeForBuild({}, {
     interfaces: { Ethernet: [address('192.168.28.239')] },
     probe: async () => undefined,
-    log: message => { lines.push(message) },
+    log: (message) => { lines.push(message) },
   })
   expect(built.serverMode?.origin).toBe('https://192.168.28.239:8443')
   expect(built.environment.DSH_DESKTOP_SERVER_HOST).toBeUndefined()

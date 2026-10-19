@@ -105,7 +105,7 @@ function configuresRow(patch: string, row: string): boolean {
 
 /** Whether a patch document carries anything beyond comments and an empty list. */
 function hasRows(patch: string): boolean {
-  return patch.split('\n').some(line => {
+  return patch.split('\n').some((line) => {
     const trimmed = line.trim()
     return trimmed !== '' && !trimmed.startsWith('#') && trimmed !== '[]'
   })

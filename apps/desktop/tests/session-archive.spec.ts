@@ -8,7 +8,7 @@ const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ spawn: spawnMock }))
 
 /** One fake child process the schedule can drive. */
-function fakeChild(options: { code?: number | null, stdout?: string, stderr?: string, error?: Error, never?: boolean } = {}) {
+function fakeChild(options: { code?: number | null; stdout?: string; stderr?: string; error?: Error; never?: boolean } = {}) {
   const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
   const emit = (event: string, ...args: unknown[]) => {
     for (const handler of listeners.get(event) ?? []) handler(...args)
