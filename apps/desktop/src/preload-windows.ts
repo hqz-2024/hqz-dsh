@@ -4,9 +4,15 @@ import { ipcRenderer } from 'electron'
 import { DESKTOP_IPC } from './ipc.ts'
 import { installWindowsMenu } from './preload-menu.ts'
 
-/** Install the Windows-only titlebar marker and observe application language and palette changes. */
-export function syncWindowsAppearance(): void {
-  if (process.platform !== 'win32') return
+/**
+ * Install the Windows-only titlebar marker and observe application language and palette changes.
+ * @returns The caption menu's mode input, so the window's mode can mount it where the
+ * application frame publishes no overlay seat of its own.
+ */
+export function syncWindowsAppearance(): { setServerMode(value: boolean): void } {
+  if (process.platform !== 'win32') return { setServerMode: () => {} }
+  let menu: ReturnType<typeof installWindowsMenu> | undefined
+  let serverMode = false
   const mark = (): void => {
     const root = document.documentElement
     root.dataset.windowsTitlebar = ''
@@ -17,7 +23,9 @@ export function syncWindowsAppearance(): void {
   const install = (): void => {
     mark()
     const root = document.documentElement
-    const menu = installWindowsMenu()
+    menu = installWindowsMenu()
+    // A mode reported before this document finished parsing still counts.
+    menu.setServerMode(serverMode)
     const probe = document.createElement('span')
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;background-color:var(--dsw-specific-sidebar-fill);color:var(--dsw-alias-label-primary)'
     document.body.append(probe)
@@ -41,7 +49,7 @@ export function syncWindowsAppearance(): void {
       const current = JSON.stringify(values)
       if (current === previous) return
       previous = current
-      menu.update()
+      menu?.update()
       ipcRenderer.send(DESKTOP_IPC.windowsAppearance, ...values)
     }
     const observer = new MutationObserver(send)
@@ -51,7 +59,7 @@ export function syncWindowsAppearance(): void {
     document.head.addEventListener('load', send, true)
     window.addEventListener('pagehide', () => {
       observer.disconnect()
-      menu.dispose()
+      menu?.dispose()
       probe.remove()
       document.head.removeEventListener('load', send, true)
     }, { once: true })
@@ -59,4 +67,10 @@ export function syncWindowsAppearance(): void {
   }
   if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', install, { once: true })
   else install()
+  return {
+    setServerMode: (value: boolean) => {
+      serverMode = value
+      menu?.setServerMode(value)
+    },
+  }
 }

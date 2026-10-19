@@ -3,6 +3,7 @@
 import type { DesktopShortcutInput, ShortcutConfigSnapshot, ShortcutSaveResult } from '@deepseek-ai/dsh-client-shortcuts/protocol'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { DESKTOP_IPC, SCHEME, type DshDesktopProductApi, type DesktopUpdatePresentation } from './ipc.ts'
+import { installModeBanner } from './preload-mode.ts'
 import { PLATFORM_IPC } from './platform-ipc.ts'
 import { markDocumentPlatform, syncWindowFullscreen } from './preload-platform.ts'
 import { syncNativeTheme } from './preload-theme.ts'
@@ -71,7 +72,22 @@ if (location.protocol === `${SCHEME}:` && location.hostname === 'app') {
     if (previous === null) body.removeAttribute('tabindex')
     else body.setAttribute('tabindex', previous)
   })
-  syncWindowsAppearance()
+  // The Windows caption and the mode banner belong to the window rather than to
+  // one origin: server mode shows the deployment's own Web UI, and without the
+  // caption its title bar would lose the menus and the window would give no sign
+  // of which deployment it is showing. Both stay outside the gate above, which
+  // guards only the privileged bridges.
+  const caption = syncWindowsAppearance()
+  installModeBanner(ipcRenderer)
+  // The caption menubar mounts itself once the application frame publishes its
+  // overlay seat; server mode has no such seat, so the shell's own mode report is
+  // what mounts it there.
+  ipcRenderer.on(DESKTOP_IPC.mode, (_event, presentation: unknown) => {
+    if (typeof presentation !== 'object' || presentation === null) return
+    const value = presentation as { mode?: unknown }
+    if (value.mode !== 'local' && value.mode !== 'server') return
+    caption.setServerMode(value.mode === 'server')
+  })
   if (process.platform === 'win32') installMandatoryUpdateOverlay()
   contextBridge.exposeInMainWorld('__DSH_DIRECTORY_PICKER__', {
     pick: () => ipcRenderer.invoke(DESKTOP_IPC.directoryPick) as Promise<string | null>,
@@ -96,6 +112,22 @@ if (location.protocol === `${SCHEME}:` && location.hostname === 'app') {
 markDocumentPlatform()
 syncWindowFullscreen()
 syncNativeTheme()
+// The Windows caption and the mode banner belong to the window rather than to
+// one origin: server mode shows the deployment's own Web UI, and without the
+// caption its title bar would lose the menus and the window would give no sign
+// of which deployment it is showing. Both stay outside the gate above, which
+// guards only the privileged bridges.
+const caption = syncWindowsAppearance()
+installModeBanner(ipcRenderer)
+// The caption menubar mounts itself once the application frame publishes its
+// overlay seat; server mode has no such seat, so the shell's own mode report is
+// what mounts it there.
+ipcRenderer.on(DESKTOP_IPC.mode, (_event, presentation: unknown) => {
+  if (typeof presentation !== 'object' || presentation === null) return
+  const value = presentation as { mode?: unknown }
+  if (value.mode !== 'local' && value.mode !== 'server') return
+  caption.setServerMode(value.mode === 'server')
+})
 // Main-process IPC also verifies the owning window and top frame.
 contextBridge.exposeInMainWorld('dshDesktop', location.protocol === `${SCHEME}:` && location.hostname === 'app' && process.isMainFrame ? createProductApi() : { protocolVersion: 1 })
 

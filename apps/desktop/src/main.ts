@@ -23,13 +23,15 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron'
 import { resolveDesktopPaths } from './paths.ts'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { DesktopProjectManager } from './project-manager.ts'
 import { DesktopHostFatalError, DesktopHostProcess, DesktopHostUncleanExitError } from './host-process.ts'
+import { withCertificateAuthority } from './node-environment.ts'
 import { DesktopPlatformView, PLATFORM_IPC, platformBounds } from './platform-view.ts'
 import { installDesktopDirectoryPicker } from './directory-picker.ts'
 import { installMicrophonePermissions } from './microphone-permissions.ts'
 import { DesktopBackendController } from './backend-controller.ts'
-import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopUpdateState } from './ipc.ts'
+import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopModePresentation, type DesktopUpdateState } from './ipc.ts'
 import { readDeviceInfo } from './device-info.ts'
 import { desktopUpdateReadyConfirmation, formatDesktopMessage, resolveDesktopLocale, resolveDesktopStartupLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
@@ -37,8 +39,22 @@ import { desktopUpdateChannel } from './update-channel.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 import { DesktopCommandManager } from './command-management.ts'
 import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-document.ts'
+import { serveShellDocument } from './shell-document.ts'
+import { resolveSessionArchiveConfig, SessionArchive } from './session-archive.ts'
+import {
+  certificateFingerprint256,
+  decideServerCertificate,
+  isDesktopMode,
+  resolveServerModeConfig,
+  serverNavigationAllowed,
+  startupDesktopMode,
+  writeDesktopMode,
+  type DesktopMode,
+} from './server-mode.ts'
 import { DesktopFatalRecovery } from './fatal-recovery.ts'
 import { pruneCrashReports, RendererConsoleTail, writeCrashReport, type CrashReportSource } from './crash-report.ts'
+import { DesktopLog } from './desktop-log.ts'
+import { resolveDesktopGatewayConfig, seedDesktopGateway } from './desktop-gateway.ts'
 import { openWelcomeWindow } from './welcome-window.ts'
 import { WELCOME_IPC, needsWelcome, type WelcomeNotice } from './welcome-api.ts'
 import { connectDesktopWelcome, type DesktopWelcomeBackend } from './welcome-backend.ts'
@@ -87,6 +103,17 @@ app.setAppLogsPath()
 function currentDesktopLocale(): ReturnType<typeof resolveDesktopLocale> {
   return resolveDesktopLocale(windowsLanguage ?? app.getLocale())
 }
+// Beside the shell's own state, so a machine that shows the wrong document can
+// hand over the lines that say which mode it chose and why it refused a
+// certificate. The console carries the same lines for a terminal launch.
+const log = new DesktopLog(join(app.getPath('userData'), 'desktop.log'))
+
+/** Report one line to both the console and this installation's log. */
+function note(message: string): void {
+  console.info(message)
+  log.info(message)
+}
+
 /** Quit without the task confirmation; the caller has already decided the application must stop. */
 function quitWithoutConfirmation(): void {
   skipQuitConfirmation = true
@@ -123,6 +150,7 @@ function persistCrashReport(error: unknown, source: CrashReportSource): Promise<
 
 function reportFatal(error: unknown, source: CrashReportSource): void {
   console.error(error)
+  log.error('fatal', error)
   if (shuttingDown) {
     // No dialog during shutdown, but the report still records what failed on the way out.
     void persistCrashReport(error, source)
@@ -205,7 +233,7 @@ function platformLoginUrl(authorizeUrl: string): string {
   return url.href
 }
 
-function createWindow(preload: string, show = false, primary = false): BrowserWindow {
+function createWindow(preload: string, show = false, primary = false, staysInWindow: (url: string) => boolean = () => false): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -305,8 +333,15 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
   window.webContents.on('will-navigate', (event, url) => {
     const destination = new URL(url)
     const current = new URL(window.webContents.getURL())
-    if (destination.protocol !== `${SCHEME}:`
-      && !(destination.protocol === 'http:' && destination.origin === current.origin)) {
+    // A single-page application rewrites its own URL constantly, so a document
+    // stays in the window as long as it remains on the origin it is already
+    // showing. That covers both schemes the Web application is served over:
+    // `http:` for the Host the shell starts, `https:` for a deployment behind a
+    // TLS terminator. Anything else — and any navigation the server-mode policy
+    // allows — is either dropped or handed to the system browser.
+    const sameOrigin = (destination.protocol === 'http:' || destination.protocol === 'https:')
+      && destination.origin === current.origin
+    if (destination.protocol !== `${SCHEME}:` && !sameOrigin && !staysInWindow(url)) {
       event.preventDefault()
       if (['http:', 'https:'].includes(destination.protocol)) void shell.openExternal(url)
     }
@@ -320,7 +355,8 @@ async function main(): Promise<void> {
   const journalDirectory = process.env.DSH_DESKTOP_UPDATE_JOURNAL_DIR
   const updateJournal = journalDirectory === undefined ? undefined : new DesktopUpdateJournal(journalDirectory, app.getVersion())
   const resources = runtimeResources()
-  const paths = resolveDesktopPaths()
+  const dshHome = resolveDshHome()
+  const paths = resolveDesktopPaths(dshHome)
   const development = !app.isPackaged
   const primaryRuntime = development
     ? developmentPrimaryRuntime()
@@ -339,6 +375,60 @@ async function main(): Promise<void> {
   })
   let hostEnvironment: NodeJS.ProcessEnv = process.env
   const prepareHostEnvironment = async (): Promise<void> => { hostEnvironment = await loginShell }
+
+  // Resolved before anything that talks to the deployment starts: local mode asks
+  // the deployment for its models, so the route and the certificate its terminator
+  // presents have to be in place first — otherwise the bundled application opens
+  // asking for an API key this machine does not have and should not need.
+  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
+  const gateway = resolveDesktopGatewayConfig('dshDesktopGateway' in manifest ? manifest.dshDesktopGateway : undefined)
+  let trustAnchor: string | undefined
+  if (gateway === undefined) {
+    note('desktop gateway: this build carries no model route; local mode needs client/provision-client.ps1')
+  } else {
+    const seed = seedDesktopGateway(dshHome, gateway)
+    trustAnchor = seed.certificateAuthority
+    const trusted = trustAnchor === undefined ? 'this build carries no certificate to trust' : `trusting ${trustAnchor}`
+    const configured = seed.written.length === 0 ? 'this machine is already configured' : `wrote ${seed.written.join(', ')}`
+    note(`desktop gateway: ${gateway.origin} (${gateway.models.join(', ')}); ${trusted}; ${configured}`)
+  }
+  const deploymentEnvironment = withCertificateAuthority(process.env, trustAnchor)
+  // Archiving this machine's own sessions is a client capability with no
+  // dependence on the window: it is scheduled from the Harness home alone, and a
+  // machine that was never provisioned for it simply has no script to run.
+  const archiveConfig = resolveSessionArchiveConfig({ dshHome, environment: process.env })
+  const archive = archiveConfig === undefined
+    ? undefined
+    : new SessionArchive(resources.node, archiveConfig, dshHome, deploymentEnvironment)
+  /**
+   * Run one archive pass and report it.
+   *
+   * Failure is reported, never raised: the script's own output names what went
+   * wrong (no sessions yet, no token provisioned, deployment unreachable), and
+   * a client that cannot archive must still start and work.
+   */
+  const runArchiveNow = async (): Promise<void> => {
+    if (archive === undefined) return
+    const run = await archive.runNow()
+    const detail = run.output === '' ? 'no output' : run.output
+    if (run.ok) note(`desktop session archive: ${detail}`)
+    else log.error(`desktop session archive: failed (${run.code === undefined ? 'killed' : String(run.code)})`, detail)
+  }
+  // The deployment this window may show in server mode, and the mode the last
+  // run left selected. Both are resolved before the first window exists, because
+  // the document that window loads is what they decide.
+  const clientSettingsFile = join(app.getPath('userData'), 'desktop-client.json')
+  const modeFile = join(app.getPath('userData'), 'desktop-mode.json')
+  const serverConfig = resolveServerModeConfig({
+    manifestValue: 'dshDesktopServerMode' in manifest ? manifest.dshDesktopServerMode : undefined,
+    environmentValue: process.env.DSH_DESKTOP_SERVER_MODE,
+    settingsFile: clientSettingsFile,
+  })
+  let mode: DesktopMode = startupDesktopMode(modeFile, { deploymentConfigured: serverConfig !== undefined })
+  note(serverConfig === undefined
+    ? `desktop mode: starting in ${mode} mode; no deployment is configured`
+    : `desktop mode: starting in ${mode} mode for ${serverConfig.origin}`)
   let quitting = false
   let startup: Promise<void> | undefined
   let workspaceRecovery: Promise<void> | undefined
@@ -404,6 +494,44 @@ async function main(): Promise<void> {
   let hostCookie: string | undefined
   const browserGuests = new DesktopBrowserGuests(() => hostUrl)
   let injections: readonly unknown[] = []
+  /** The document the window shows for the mode it is in. */
+  const modeUrl = (): string => (mode === 'server' && serverConfig !== undefined ? serverConfig.origin : applicationUrl)
+  /** What the shell tells a document about the mode its window is showing. */
+  const modePresentation = (): DesktopModePresentation => ({
+    mode,
+    text: mode === 'server' ? currentDesktopLocale().messages.modeServerBanner : currentDesktopLocale().messages.modeLocal,
+    switchText: currentDesktopLocale().messages.modeSwitchToLocal,
+    canSwitch: serverConfig !== undefined,
+    ...(serverConfig?.label === undefined ? {} : { label: serverConfig.label }),
+    ...(serverConfig === undefined ? {} : { origin: serverConfig.origin }),
+  })
+  const publishMode = (): void => {
+    mainWindow?.webContents.send(DESKTOP_IPC.mode, modePresentation())
+  }
+  /**
+   * Give the window the chrome its mode owns.
+   *
+   * The caption colour is pushed by the page in local mode, because the Web UI
+   * reads the active palette. Server mode shows a document this shell did not
+   * author, and that document cannot know which deployment it is being shown
+   * for, so the shell sets an unmistakable amber caption itself. The title
+   * carries the same fact into the taskbar and Alt-Tab.
+   */
+  const applyModeChrome = (): void => {
+    const window = mainWindow
+    if (window === undefined || window.isDestroyed()) return
+    window.setTitle(mode === 'server'
+      ? `DeepSeek Harness — ${currentDesktopLocale().messages.modeServer}${serverConfig?.label === undefined ? '' : ` · ${serverConfig.label}`}`
+      : 'DeepSeek Harness')
+    if (process.platform !== 'win32') return
+    window.setTitleBarOverlay(mode === 'server'
+      ? { color: '#f7c948', symbolColor: '#3b2600' }
+      : {
+        color: nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb',
+        symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
+      })
+  }
+
   let welcomeBackend: DesktopWelcomeBackend | undefined
   let reportedLaunch = false
   let analyticsEnabled = false
@@ -445,7 +573,7 @@ async function main(): Promise<void> {
   const backend = new DesktopBackendController((onFailure) => {
     const hostInspectPort = developmentHostInspectPort(development)
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
-      hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
+      hostInspectPort, withCertificateAuthority({ ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, trustAnchor), onFailure,
       primaryRuntime,
       resources, (next) => { platformView.setSession(next) })
     return {
@@ -568,6 +696,11 @@ async function main(): Promise<void> {
   stopForRecovery = () => backend.close()
 
   const reconcileBackend = (): Promise<void> => {
+    // Server mode shows a deployment this shell does not run: it starts no Host
+    // and writes no profile, so no local agent owns the session. Local mode
+    // loads the packaged document first — the loading page accepts boot
+    // injections whenever they arrive — and starts the Host behind it.
+    if (mode === 'server') return navigateMain(modeUrl())
     startup ??= (async () => {
       await navigateMain(applicationUrl)
       await backend.start(async () => {
@@ -584,8 +717,52 @@ async function main(): Promise<void> {
     return startup
   }
 
-  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
   const updateChannel = desktopUpdateChannel(manifest)
+  let switching = false
+  /**
+   * Show the other deployment in the same window.
+   *
+   * The window is never destroyed: replacing the document is enough, and
+   * destroying the only window would quit the application. The local Host keeps
+   * running underneath, so switching back is one page load rather than a cold
+   * start, and nothing about the profile changes either way.
+   * @param next - the mode to show.
+   */
+  const switchMode = async (next: DesktopMode): Promise<void> => {
+    if (switching) {
+      // Swallowing this silently is what made a stuck switch look like a dead
+      // button, so the ignored request is written down where a report can find it.
+      note(`desktop mode: ignoring a switch to ${next}; one is already running`)
+      return
+    }
+    if (next === mode) return
+    if (next === 'server' && serverConfig === undefined) {
+      await ordinaryMessageBox({
+        type: 'info', title: currentDesktopLocale().messages.modeUnavailableTitle, message: currentDesktopLocale().messages.modeUnavailableDetail,
+      })
+      return
+    }
+    switching = true
+    note(`desktop mode: switching to ${next}`)
+    try {
+      mode = next
+      const failure = writeDesktopMode(modeFile, mode)
+      if (failure !== undefined) console.error('desktop server mode: could not store the selected mode', failure)
+      // The memoised entry describes the document being replaced, so it must not
+      // survive the switch even when the next URL happens to match it.
+      navigation = undefined
+      applyModeChrome()
+      publishMode()
+      await reconcileBackend()
+      publishMode()
+      note(`desktop mode: now showing ${next}`)
+    } finally { switching = false }
+  }
+  const reportServerModeLoaded = (): void => {
+    applyModeChrome()
+    publishMode()
+  }
+
   const updates = new DesktopUpdateCoordinator(
     publishUpdate,
     async () => {
@@ -666,8 +843,7 @@ async function main(): Promise<void> {
 
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url)
-    // Shell-owned documents live in the application bundle and never pass through the Host.
-    if (url.hostname === 'shell') return serveWebDocument(request, join(app.getAppPath(), 'renderer'))
+    if (url.hostname === 'shell') return serveShellDocument(request)
     if (url.hostname === 'app') {
       if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.startsWith('/assets/')
         || ['/favicon.svg', '/manifest.webmanifest'].includes(url.pathname)) {
@@ -686,6 +862,44 @@ async function main(): Promise<void> {
   const shortcuts = installDesktopShortcuts(() => mainWindow, app.getPath('userData'),
     process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux', () => { refreshApplicationMenu() }, window => updateOverlays.input(window))
   app.on('will-quit', () => { shortcuts.dispose() })
+
+  // Accept the certificate a configured deployment presents, and only that
+  // one: the decision is scoped to the configured origin and compares the
+  // fingerprint itself, because Electron's own error is not a trust decision.
+  app.on('certificate-error', (event, _webContents, url, _error, certificate, callback) => {
+    if (serverConfig === undefined) return
+    let fingerprint: string | undefined
+    try {
+      fingerprint = certificateFingerprint256(certificate.data ?? '')
+    } catch {
+      fingerprint = undefined
+    }
+    const decision = decideServerCertificate(serverConfig, url, fingerprint)
+    note(`desktop server mode: ${decision.reason}`)
+    if (!decision.accept) return
+    event.preventDefault()
+    callback(true)
+  })
+
+  // The banner's switch action arrives as a plain send from the preload, which
+  // runs on the remote document too. It carries no authority of its own, so the
+  // request is validated against the window's own top frame and nothing else.
+  ipcMain.on(DESKTOP_IPC.modeSwitch, (event, requested: unknown) => {
+    if (mainWindow === undefined || event.sender !== mainWindow.webContents
+      || event.senderFrame === null || event.senderFrame !== mainWindow.webContents.mainFrame) return
+    if (!isDesktopMode(requested)) return
+    // A switch that fails has to say so: the banner's action is the only way back
+    // to the bundled deployment from a document this shell does not control.
+    void switchMode(requested).catch(async (error: unknown) => {
+      log.error(`desktop mode: switching to ${requested} failed`, error)
+      await ordinaryMessageBox({
+        type: 'error',
+        title: currentDesktopLocale().messages.switchFailedTitle,
+        message: currentDesktopLocale().messages.switchFailedDetail,
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
+  })
 
   ipcMain.handle(DESKTOP_IPC.boot, async (event) => {
     assertDesktopSender(event, ['app'])
@@ -925,6 +1139,7 @@ async function main(): Promise<void> {
   powerMonitor.on('resume', automaticCheck)
   app.on('will-quit', () => {
     updateSchedule.dispose()
+    archive?.dispose()
     powerMonitor.off('resume', automaticCheck)
     updates.dispose()
   })
@@ -951,6 +1166,21 @@ async function main(): Promise<void> {
       { role: 'hideOthers', label: currentDesktopLocale().messages.hideOtherApplications },
       { role: 'unhide', label: currentDesktopLocale().messages.showAllApplications }, { type: 'separator' }]
     : []
+  const modeItems = (): MenuItemConstructorOptions[] => [
+    {
+      label: currentDesktopLocale().messages.modeLocal,
+      type: 'radio',
+      checked: mode === 'local',
+      click: () => { void switchMode('local') },
+    },
+    {
+      label: currentDesktopLocale().messages.modeServer,
+      type: 'radio',
+      checked: mode === 'server',
+      enabled: serverConfig !== undefined,
+      click: () => { void switchMode('server') },
+    },
+  ]
   const applicationItems = (): MenuItemConstructorOptions[] => [
     // Windows has no system About panel; Electron's fallback is a plain
     // message box, so the shell shows its own dimmed dialog instead.
@@ -971,6 +1201,16 @@ async function main(): Promise<void> {
         quitWithoutConfirmation()
       } },
     ] : [],
+
+    // The schedule is invisible while it works, so the same command is offered
+    // on demand; it shares the one in-flight guard with the timer.
+    ...archive === undefined ? [] : [{
+      label: currentDesktopLocale().messages.archiveNowMenu,
+      click: () => { void runArchiveNow() },
+    }],
+    // Both modes are reachable from here, and the menu is rebuilt per popup, so
+    // the radio marks the mode the window is showing right now.
+    { label: currentDesktopLocale().messages.modeMenu, submenu: modeItems() },
     { type: 'separator' },
     ...hideCommands,
     { role: 'quit', ...(darwin ? { label: currentDesktopLocale().messages.quitApplication }
@@ -1015,7 +1255,13 @@ async function main(): Promise<void> {
 
   if (process.platform === 'win32') {
     ipcMain.handle(DESKTOP_IPC.windowsMenu, (event, name: unknown, x: unknown, y: unknown) => {
-      assertDesktopSender(event, ['app'])
+      // The caption menubar is shell UI drawn into whichever document the window
+      // shows, so this one request is accepted from the main window's own top
+      // frame rather than only from the bundled application: in server mode the
+      // bar stands in a deployment's page, and it pops a menu the person still
+      // has to click. The request itself carries no page-supplied authority — a
+      // menu name and two coordinates — and every other handler keeps the origin
+      // check.
       if (mainWindow === undefined || event.sender !== mainWindow.webContents
         || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('desktop menu: rejected sender')
       if ((name !== 'application' && name !== 'edit')
@@ -1070,7 +1316,7 @@ async function main(): Promise<void> {
     }
   }
   const createMainWindow = (): BrowserWindow => {
-    const window = createWindow(appPreload, false, true)
+    const window = createWindow(appPreload, false, true, url => serverNavigationAllowed(serverConfig, url))
     mainWindow = window
     browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
     shortcuts.attach(window)
@@ -1101,10 +1347,18 @@ async function main(): Promise<void> {
       if (details.level !== 'error') return
       rendererConsole.push(`${details.sourceId}:${String(details.lineNumber)} ${details.message}`)
     })
+    window.webContents.on('did-finish-load', () => { reportServerModeLoaded() })
     window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
       if (isMainFrame && code !== -3 && !quitting && !window.isDestroyed()) {
         reportFatal(new Error(`Desktop page failed to load: ${url} (${String(code)}: ${description})`), 'renderer')
       }
+    })
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || !input.control || !input.alt) return
+      const requested: DesktopMode | undefined = input.code === 'Digit1' ? 'server' : input.code === 'Digit2' ? 'local' : undefined
+      if (requested === undefined) return
+      event.preventDefault()
+      void switchMode(requested)
     })
     window.webContents.on('preload-error', (_event, _path, error) => {
       if (!quitting && !window.isDestroyed()) reportFatal(error, 'renderer')
@@ -1222,7 +1476,7 @@ async function main(): Promise<void> {
     const window = welcomeWindow ?? mainWindow
     if (window === undefined || window.isDestroyed()) {
       try { createMainWindow() } catch (error) { reportFatal(error, 'main'); return }
-      void (backend.state.phase === 'ready' ? openInitialWindow() : navigateMain(applicationUrl)).catch((error: unknown) => { reportFatal(error, 'main') })
+      void (mode === 'server' ? navigateMain(modeUrl()) : backend.state.phase === 'ready' ? openInitialWindow() : navigateMain(applicationUrl)).catch((error: unknown) => { reportFatal(error, 'main') })
       return
     }
     // Startup and sign-out select the visible window before activation may reveal the workspace.
@@ -1288,7 +1542,8 @@ async function main(): Promise<void> {
   })
 
   mainWindow = createMainWindow()
-  if (typeof manifest !== 'object' || manifest === null) throw new Error('desktop policy: invalid application manifest')
+  applyModeChrome()
+  archive?.start()
   const developmentPolicy = app.isPackaged ? undefined : process.env.DSH_DESKTOP_MANDATORY_UPDATE_CONFIG
   const policyInput: unknown = app.isPackaged
     ? ('dshMandatoryUpdatePolicy' in manifest ? manifest.dshMandatoryUpdatePolicy : undefined)

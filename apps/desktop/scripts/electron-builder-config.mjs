@@ -23,6 +23,8 @@ import { resolveDesktopAutoUpdateConfig } from './desktop-auto-update-environmen
 import { resolveDesktopBuildCommit } from './desktop-build-commit.mjs'
 import { resolveDesktopBuildVersion } from './desktop-build-version.mjs'
 import { resolveDesktopPolicyEnvironment } from './desktop-policy-environment.mjs'
+import { resolveDesktopServerModeEnvironment } from './desktop-server-mode-environment.mjs'
+import { resolveDesktopGatewayEnvironment } from './desktop-gateway-environment.mjs'
 import { desktopArtifactOutput, desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { installWindowsDirectoryInstaller } from './windows-directory-installer.mjs'
 import { preserveWindowsRuntimeSignature, signWindowsCode } from './windows-runtime-signature.mjs'
@@ -51,6 +53,11 @@ export function createElectronBuilderConfig(
   preparedRuntimeVersion = undefined,
 ) {
   const appId = resolveDesktopAppId(env)
+  const policy = resolveDesktopPolicyEnvironment(env)
+  const serverMode = resolveDesktopServerModeEnvironment(env)
+  // The gateway lives on the deployment server mode connects to, so a build that
+  // names one names the other unless an operator splits them.
+  const gateway = resolveDesktopGatewayEnvironment(env, serverMode?.origin)
   const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
   const resolvedPlatform = targetPlatform ?? hostPlatform
   const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
@@ -110,6 +117,13 @@ export function createElectronBuilderConfig(
       dshDesktopAppId: appId,
       dshDesktopUpdateChannel: update?.channel ?? 'nightly',
       ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
+      ...(serverMode === undefined ? {} : {
+        dshDesktopServerMode: {
+          origin: serverMode.origin,
+          ...(serverMode.label === undefined ? {} : { label: serverMode.label }),
+        },
+      }),
+      ...(gateway === undefined ? {} : { dshDesktopGateway: gateway }),
       ...buildVersion === productVersion ? {} : { version: buildVersion },
       ...packaged === undefined ? {} : { dshBuildCommit: packaged.commit, dshBuildDirty: packaged.dirty },
     },

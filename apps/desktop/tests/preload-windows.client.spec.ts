@@ -4,8 +4,9 @@ import { DESKTOP_IPC } from '../src/ipc.ts'
 import { syncWindowsAppearance } from '../src/preload-windows.ts'
 
 const send = vi.hoisted(() => vi.fn())
+const menu = vi.hoisted(() => ({ update: vi.fn(), dispose: vi.fn(), setServerMode: vi.fn() }))
 vi.mock('electron', () => ({ ipcRenderer: { send } }))
-vi.mock('../src/preload-menu.ts', () => ({ installWindowsMenu: () => ({ update: vi.fn(), dispose: vi.fn() }) }))
+vi.mock('../src/preload-menu.ts', () => ({ installWindowsMenu: () => menu }))
 
 afterEach(() => {
   window.dispatchEvent(new Event('pagehide'))
@@ -15,6 +16,27 @@ afterEach(() => {
   document.body.removeAttribute('data-ds-dark-theme')
   vi.restoreAllMocks()
   send.mockClear()
+})
+
+/** The caption reads two palette values through a 1×1 canvas; jsdom has no renderer. */
+function mockCanvasContext(): void {
+  const context = {
+    fillStyle: '', clearRect: vi.fn(), fillRect: vi.fn(),
+    getImageData: () => ({ data: new Uint8ClampedArray([255, 255, 255, 255]) }),
+  }
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D)
+}
+
+it('passes the window mode to the caption menu, which server mode mounts without a seat', () => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+  mockCanvasContext()
+  const caption = syncWindowsAppearance()
+  // The menu is built before the mode is known on a document that never
+  // publishes the application frame's overlay seat, so the update has to reach it
+  // whenever it arrives.
+  expect(menu.setServerMode).toHaveBeenCalledWith(false)
+  caption.setServerMode(true)
+  expect(menu.setServerMode).toHaveBeenLastCalledWith(true)
 })
 
 it.each(['darwin', 'linux'] as const)('does not install Windows controls on %s', (platform) => {

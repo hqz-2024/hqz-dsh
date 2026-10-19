@@ -100,6 +100,8 @@ export const en = {
   checkUpdatesMenu: 'Check for Updates…',
   reloadPageMenu: 'Reload Page',
   restartAppHostMenu: 'Restart App and Host',
+
+  archiveNowMenu: 'Archive sessions now',
   updateCheckFailedTitle: 'Update Check Failed',
   updateCheckFailed: 'Could not check for updates. Please try again later.',
   updateDownloadFailed: 'Could not download the update. Please try again.',
@@ -166,6 +168,22 @@ export const en = {
   mandatoryCopyFailed: 'Could not copy the link. Select and copy it below.',
   mandatoryAddress: 'Download link',
   mandatoryNotification: 'Return to the application to confirm installation and restart.',
+  modeMenu: 'Mode',
+  modeLocal: 'Local mode',
+  modeServer: 'Server mode',
+  modeServerBanner: 'Server mode',
+  modeSwitchToLocal: 'Switch to local',
+  modeSwitchToServer: 'Switch to server',
+  modeUnavailableTitle: 'No server is configured',
+  modeUnavailableDetail: 'This build carries no deployment to connect to. Set one in the client settings file, then restart the application.',
+  switchFailedTitle: 'Could not switch modes',
+  switchFailedDetail: 'The application could not show the other deployment. desktop.log, beside the client settings file, holds the same detail.',
+  serverUnreachableTitle: 'Cannot reach the server',
+  serverUnreachableDetail: 'The application could not load {origin}. Check that the deployment is running and that this computer is on the same network.',
+  serverRetry: 'Try again',
+  serverSwitchToLocal: 'Use local mode',
+  serverCertificateRefusedTitle: 'The server certificate was refused',
+  serverCertificateRefusedDetail: 'The certificate presented by {origin} is not the one this client expects. The connection was stopped.',
 } as const
 
 /** Every Desktop locale supplies the complete English key set. */
@@ -271,6 +289,8 @@ export const zh = {
   checkUpdatesMenu: '检查更新…',
   reloadPageMenu: '刷新页面',
   restartAppHostMenu: '重启应用与 Host',
+
+  archiveNowMenu: '立即归档会话',
   updateCheckFailedTitle: '更新检查失败',
   updateCheckFailed: '检查更新失败，请稍后重试。',
   updateDownloadFailed: '下载更新失败，请重试。',
@@ -337,6 +357,22 @@ export const zh = {
   mandatoryCopyFailed: '复制失败，请手动选择并复制下方链接。',
   mandatoryAddress: '下载链接',
   mandatoryNotification: '返回应用确认安装并重启。',
+  modeMenu: '模式',
+  modeLocal: '本地模式',
+  modeServer: '服务器模式',
+  modeServerBanner: '服务器模式',
+  modeSwitchToLocal: '切回本地',
+  modeSwitchToServer: '切到服务器',
+  modeUnavailableTitle: '未配置服务器',
+  modeUnavailableDetail: '这个安装包没有内置要连接的部署。请在客户端设置文件里填写服务器地址，然后重启应用。',
+  switchFailedTitle: '切换模式失败',
+  switchFailedDetail: '应用没能显示另一个部署。同样的详情写进了与客户端设置文件同目录的 desktop.log。',
+  serverUnreachableTitle: '连不上服务器',
+  serverUnreachableDetail: '无法加载 {origin}。请确认部署在运行，且这台电脑与服务器在同一网络。',
+  serverRetry: '重试',
+  serverSwitchToLocal: '改用本地模式',
+  serverCertificateRefusedTitle: '服务器证书被拒绝',
+  serverCertificateRefusedDetail: '{origin} 出示的证书不是这个客户端所预期的，连接已中止。',
 } as const satisfies DesktopMessages
 
 /** Locale payload exposed to the Desktop-owned renderer. */
