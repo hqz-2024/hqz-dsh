@@ -53,7 +53,6 @@ export function createElectronBuilderConfig(
   preparedRuntimeVersion = undefined,
 ) {
   const appId = resolveDesktopAppId(env)
-  const policy = resolveDesktopPolicyEnvironment(env)
   const serverMode = resolveDesktopServerModeEnvironment(env)
   // The gateway lives on the deployment server mode connects to, so a build that
   // names one names the other unless an operator splits them.
